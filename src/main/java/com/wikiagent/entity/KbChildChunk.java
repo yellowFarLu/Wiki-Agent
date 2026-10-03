@@ -37,6 +37,10 @@ public class KbChildChunk {
     @Column(nullable = false, length = 4000)
     private String content;
 
+    /** V19：chunk 内容哈希（去重检测用；nullable，存量行回填 null）。 */
+    @Column(name = "content_hash", length = 64)
+    private String contentHash;
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
     public String getDocId() { return docId; }
@@ -53,4 +57,6 @@ public class KbChildChunk {
     public void setActive(boolean active) { this.active = active; }
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }
+    public String getContentHash() { return contentHash; }
+    public void setContentHash(String contentHash) { this.contentHash = contentHash; }
 }

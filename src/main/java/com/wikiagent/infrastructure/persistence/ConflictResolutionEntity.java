@@ -47,6 +47,14 @@ public class ConflictResolutionEntity {
     @Column(name = "resolved_at")
     private Instant resolvedAt;
 
+    /** V19：冲突来源（如 INGEST 入库检测 / SCAN 巡检；nullable 兼容存量行）。 */
+    @Column(name = "source", length = 32)
+    private String source;
+
+    /** V19：系统建议的解决方式提示（nullable，人工裁决仅参考）。 */
+    @Column(name = "resolution_hint", length = 16)
+    private String resolutionHint;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getChunkIdA() { return chunkIdA; }
@@ -71,4 +79,8 @@ public class ConflictResolutionEntity {
     public void setDetectedAt(Instant detectedAt) { this.detectedAt = detectedAt; }
     public Instant getResolvedAt() { return resolvedAt; }
     public void setResolvedAt(Instant resolvedAt) { this.resolvedAt = resolvedAt; }
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+    public String getResolutionHint() { return resolutionHint; }
+    public void setResolutionHint(String resolutionHint) { this.resolutionHint = resolutionHint; }
 }

@@ -6,6 +6,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 @Entity
 @Table(name = "kb_document")
@@ -48,6 +49,16 @@ public class KbDocument {
     @Column(nullable = false)
     private Instant createdAt = Instant.now();
 
+    /** V19：知识生效日期（去重/冲突裁决依据；存量文档为 null）。 */
+    private LocalDate effectiveDate;
+
+    /** V19：生效日期设置人（nullable）。 */
+    @Column(length = 64)
+    private String effectiveSetBy;
+
+    /** V19：生效日期设置时间（nullable）。 */
+    private Instant effectiveSetAt;
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
     public String getFilename() { return filename; }
@@ -66,4 +77,10 @@ public class KbDocument {
     public void setError(String error) { this.error = error; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public LocalDate getEffectiveDate() { return effectiveDate; }
+    public void setEffectiveDate(LocalDate effectiveDate) { this.effectiveDate = effectiveDate; }
+    public String getEffectiveSetBy() { return effectiveSetBy; }
+    public void setEffectiveSetBy(String effectiveSetBy) { this.effectiveSetBy = effectiveSetBy; }
+    public Instant getEffectiveSetAt() { return effectiveSetAt; }
+    public void setEffectiveSetAt(Instant effectiveSetAt) { this.effectiveSetAt = effectiveSetAt; }
 }
