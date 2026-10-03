@@ -32,13 +32,13 @@ import java.util.Set;
  * 返回的 chunkIdA/B 必须等于输入对的两个 id（顺序可调换），否则丢弃。
  * 所有异常/超时/非法 JSON/候选集外 chunkId 一律视为“无冲突”放行并告警，绝不阻断问答主链路。
  * <p>
- * Bean 装配：{@code wikiagent.conflict-guard.enabled=true} 时生效（虚线式扁平名；
+ * Bean 装配：{@code wikiagent.conflict-guard.enabled} 默认 true（虚线式扁平名；
  * {@code wikiagent.conflict.*} 已被离线扫描占用，两级 {@code conflict.guard} 绑不进
  * {@code WikiAgentProperties.conflictGuard}，详见该 record 的构造器注释）；
  * 注入 {@code intentChatModel}（与 {@link com.wikiagent.infrastructure.routing.DashScopeLlmRouter} 同一路由）。
  */
 @Component
-@ConditionalOnProperty(name = "wikiagent.conflict-guard.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "wikiagent.conflict-guard.enabled", havingValue = "true", matchIfMissing = true)
 public class ConflictLlmJudge {
 
     private static final Logger log = LoggerFactory.getLogger(ConflictLlmJudge.class);

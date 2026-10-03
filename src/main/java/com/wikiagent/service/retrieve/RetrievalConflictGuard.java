@@ -41,7 +41,7 @@ import java.util.Set;
  *       不默认选边（Review Focus #1/#4）</li>
  *   <li>传递冲突组（A~B、B~C）按并查集并为一组统一裁决</li>
  * </ul>
- * 门控：{@code wikiagent.conflict-guard.enabled}（默认 false；虚线式扁平名，
+ * 门控：{@code wikiagent.conflict-guard.enabled}（默认 true；虚线式扁平名，
  * {@code wikiagent.conflict.*} 已被离线扫描占用）且灰度特性
  * {@code conflict-guard} 命中当前请求身份才生效；否则原样透传零副作用。
  * <p>

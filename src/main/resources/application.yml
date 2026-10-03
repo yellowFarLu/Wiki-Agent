@@ -154,10 +154,16 @@ wikiagent:
     threshold: ${WIKIAGENT_CONFLICT_THRESHOLD:0.8}   # 相似度 > 0.8 视为冲突
     scan-cron: "0 30 2 * * ?"                          # 每日 02:30 扫已入库 chunk
 
-  # 入库去重（L0 精确 hash / L1 MinHash-LSH 近重复守卫；默认关闭）
+  # 入库去重（L0 精确 hash / L1 MinHash-LSH 近重复守卫；默认开启）
   dedup:
-    enabled: ${WIKIAGENT_DEDUP_ENABLED:false}
+    enabled: ${WIKIAGENT_DEDUP_ENABLED:true}
     near-jaccard: ${WIKIAGENT_DEDUP_NEAR_JACCARD:0.9}   # L1 桶内精确 jaccard 认定阈值
+
+  # 检索侧冲突守卫（粗筛 + qwen-flash 精判 + effective_date 裁决；默认开启。
+  # 虚线式扁平名：wikiagent.conflict.* 已被离线扫描占用，勿改成 conflict.guard 两级）
+  conflict-guard:
+    enabled: ${WIKIAGENT_CONFLICT_GUARD_ENABLED:true}
+    coarse-cosine: ${WIKIAGENT_CONFLICT_GUARD_COARSE_COSINE:0.85}
 
   # v4 §6.6.2 知识指标看板
   metrics:
@@ -333,7 +339,7 @@ wikiagent:
   # 入库流水线与检索主链路零影响（ObjectProvider 空回退）。
   # ============================================================
   graph:
-    enabled: ${WIKIAGENT_GRAPH_ENABLED:false}   # 默认关闭；开启后入库时 LLM 抽取实体关系
+    enabled: ${WIKIAGENT_GRAPH_ENABLED:true}    # 默认开启；开启后入库时 LLM 抽取实体关系（无 Key 时逐 chunk 告警跳过，不阻断入库）
     max-neighbors: 10                            # 图检索 1-hop 邻居扩展上限
     max-chars-per-chunk: 1500                    # 单 chunk 送入抽取模型的最大字符数
 

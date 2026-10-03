@@ -69,19 +69,19 @@ public record WikiAgentProperties(Milvus milvus, Retrieve retrieve, Ingest inges
 
     /**
      * 入库去重配置（L0 精确 hash + L1 MinHash-LSH 近重复守卫）。
-     * 默认关闭；{@code dedup} 整体缺省（null）时消费方按关闭处理。
+     * 默认开启；{@code dedup} 整体缺省（null，仅手工构造的测试装配）时消费方按关闭处理。
      */
     public record Dedup(
-            @DefaultValue("false") boolean enabled,
+            @DefaultValue("true") boolean enabled,
             @DefaultValue("0.9") double nearJaccard) {
     }
 
     /**
      * 检索侧冲突守卫配置（粗筛余弦阈值 + qwen-flash 精判 + 生效时间裁决）。
-     * 默认关闭；{@code conflictGuard} 整体缺省（null）时消费方按关闭处理。
+     * 默认开启；{@code conflictGuard} 整体缺省（null，仅手工构造的测试装配）时消费方按关闭处理。
      */
     public record ConflictGuard(
-            @DefaultValue("false") boolean enabled,
+            @DefaultValue("true") boolean enabled,
             @DefaultValue("0.85") double coarseCosine) {
     }
 }

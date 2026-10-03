@@ -83,7 +83,7 @@ public class IngestionService {
     private final EmbeddingCacheService embeddingCache;
     /** 缓存 key 中的模型名，与 DashScope embedding 配置一致。 */
     private final String embeddingModelName;
-    /** L0 精确去重开关（wikiagent.dedup.enabled，默认 false）。 */
+    /** L0 精确去重开关（wikiagent.dedup.enabled，默认 true）。 */
     private final boolean dedupEnabled;
     /** L0 精确去重打点 DAO（metric_event.chunkId 用真实新 chunk id）。 */
     private final MetricEventJpaDao metricEventDao;
@@ -133,7 +133,7 @@ public class IngestionService {
                             @Value("${spring.ai.dashscope.embedding.options.model:text-embedding-v4}")
                             String embeddingModelName,
                             ObjectProvider<com.wikiagent.application.graph.GraphExtractionService> graphExtractionService,
-                            @Value("${wikiagent.dedup.enabled:false}") boolean dedupEnabled,
+                            @Value("${wikiagent.dedup.enabled:true}") boolean dedupEnabled,
                             ObjectProvider<MetricEventJpaDao> metricEventDao,
                             ObjectProvider<NearDuplicateGuard> nearDuplicateGuard) {
         this.props = props;

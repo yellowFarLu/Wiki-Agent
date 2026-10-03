@@ -194,7 +194,7 @@ Milvus hybridSearch（每个查询 sub-topk=20）
 
 - 前端 `/graph`：零依赖 Canvas **自实现力导向布局**（圆形初始化 + 50 轮斥力/弹簧引力/向心力迭代），实体类型配色，支持搜索、点击实体跳转来源文档
 - `GET /api/graph/stats|/search?q=|/entity/{id}|/entity/{id}/neighbors|/doc/{docId}`
-- 开关：`WIKIAGENT_GRAPH_ENABLED=false`（默认关闭，`@ConditionalOnProperty` + 调用侧 `ObjectProvider` 空回退，主链路零影响）
+- 开关：`WIKIAGENT_GRAPH_ENABLED=true`（默认开启，`@ConditionalOnProperty` + 调用侧 `ObjectProvider` 空回退；无 DashScope Key 时逐 chunk 告警跳过，主链路零影响）
 
 ### 4️⃣ 分层记忆（横向扩展友好）
 
@@ -320,12 +320,12 @@ PENDING ─► DISPATCH ─► RUNNING ─┬─► COMPLETED ✅
 | LLM 精判 | `ConflictLlmJudge`（qwen-flash） | 结构化 JSON 判断"是否同一实体同一属性给出不同事实值"，**只检测不裁决** |
 | 确定性裁决 | `RetrievalConflictGuard` | 按 `kb_document.effective_date` 唯一权威信号移除输家 chunk（晚者胜；生效时间相同/缺失**不自动选边**，双保留 + 上下文标注 + 冲突单 `source=ONLINE_GUARD`），兜底走 `ConflictResolutionService` 人工仲裁（KEEP_A/B、MERGE、DELETE_A/B） |
 
-**两个开关（默认均关闭，显式开启才生效）**：
+**两个开关（默认均开启，可显式关闭）**：
 
 | 配置 | 默认 | 说明 |
 |---|---|---|
-| `wikiagent.dedup.enabled` | false | L0+L1 入库侧总开关（`near-jaccard` 默认 0.9） |
-| `wikiagent.conflict-guard.enabled` | false | 检索侧守卫总开关（含精判 Bean 装配；`coarse-cosine` 默认 0.85）。注意为**虚线式扁平名**：`wikiagent.conflict.*` 命名空间已被离线扫描占用 |
+| `wikiagent.dedup.enabled` | true | L0+L1 入库侧总开关（`near-jaccard` 默认 0.9） |
+| `wikiagent.conflict-guard.enabled` | true | 检索侧守卫总开关（含精判 Bean 装配；`coarse-cosine` 默认 0.85）。注意为**虚线式扁平名**：`wikiagent.conflict.*` 命名空间已被离线扫描占用 |
 | `wikiagent.gray.features.conflict-guard.*` | 未配置=全量 | 守卫叠加请求级灰度门控（稳定分桶，见模块 13） |
 
 **生效时间录入约定**：上传 `POST /api/documents` 传 `effectiveDate=yyyy-MM-dd`（缺省=服务器当天，非法格式 400）；任务框架路径经 payload 透传落库，已设置不覆盖（幂等）。存量迁移前文档 `effective_date` 可为 null → 裁决不选边、双保留。
@@ -419,10 +419,12 @@ docker-compose up -d         # MySQL+Redis+Milvus(etcd/minio)+RocketMQ+Presidio+
 # Nginx sticky-session 入口 http://localhost；副本 8081/8082
 ```
 
-### 开启 GraphRAG
+### 关闭 GraphRAG
+
+GraphRAG 默认开启（入库时自动抽取实体关系，/graph 页面生效）。如需关闭：
 
 ```bash
-export WIKIAGENT_GRAPH_ENABLED=true   # 入库时自动抽取实体关系，/graph 页面生效
+export WIKIAGENT_GRAPH_ENABLED=false
 ```
 
 ### 前端开发
@@ -453,8 +455,10 @@ mvn compile -DskipTests                       # 同步到 target/classes/static
 | `TASK_MQ` | local | `local` / `rocketmq` |
 | `WIKIAGENT_TASK_ENABLED` | true | 任务框架总开关（false 时任务 API 503） |
 | `WIKIAGENT_PERO_ENABLED` | true | PERO 主循环开关；false 回退 v1-v2 |
-| `WIKIAGENT_GRAPH_ENABLED` | false | GraphRAG 图谱抽取与检索增强 |
+| `WIKIAGENT_GRAPH_ENABLED` | true | GraphRAG 图谱抽取与检索增强 |
 | `WIKIAGENT_RERANK_ENABLED` | true | gte-rerank 精排（灰度门控） |
+| `WIKIAGENT_DEDUP_ENABLED` | true | L0+L1 入库去重总开关 |
+| `WIKIAGENT_CONFLICT_GUARD_ENABLED` | true | 检索侧冲突守卫总开关（精判随附装配） |
 | `WIKIAGENT_PARSE_PROVIDER` | dashscope | 文档富解析：none/dashscope |
 | `WIKIAGENT_FALLBACK_WEB_SEARCH_ENABLED` | true | 未命中联网搜索兜底 |
 | `WIKIAGENT_FALLBACK_OWN_KNOWLEDGE_ENABLED` | true | 未命中模型自身知识兜底 |
