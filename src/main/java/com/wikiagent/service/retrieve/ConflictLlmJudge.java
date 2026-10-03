@@ -57,11 +57,6 @@ public class ConflictLlmJudge {
     private final ModelCallRecorder recorder;
     private final String modelName;
 
-    /** 兼容旧构造（测试子类 super(null) 场景）：无打点。 */
-    public ConflictLlmJudge(@Qualifier("intentChatModel") ChatModel chatModel) {
-        this(chatModel, null, null);
-    }
-
     public ConflictLlmJudge(@Qualifier("intentChatModel") ChatModel chatModel,
                             ObjectProvider<ModelCallRecorder> recorder,
                             @Value("${wikiagent.routing.intent-model:qwen-flash}") String modelName) {
@@ -95,8 +90,9 @@ public class ConflictLlmJudge {
                     new UserMessage(userText))));
             long latency = System.currentTimeMillis() - started;
             String raw = extractText(response);
-            recordCall(tokensOf(response, true), tokensOf(response, false), latency, true);
-            return parseAndValidate(raw, pair.get(0).childId(), pair.get(1).childId());
+            ParseOutcome outcome = parseAndValidate(raw, pair.get(0).childId(), pair.get(1).childId());
+            recordCall(tokensOf(response, true), tokensOf(response, false), latency, outcome.ok());
+            return outcome.verdict();
         } catch (Exception e) {
             recordCall(null, null, System.currentTimeMillis() - started, false);
             log.warn("Conflict judge LLM 调用失败，按无冲突放行: {}", e.getMessage());
@@ -117,9 +113,9 @@ public class ConflictLlmJudge {
         return response.getResult().getOutput().getText();
     }
 
-    private Optional<ConflictVerdict> parseAndValidate(String raw, String expectedA, String expectedB) {
+    private ParseOutcome parseAndValidate(String raw, String expectedA, String expectedB) {
         if (raw == null || raw.isBlank()) {
-            return Optional.empty();
+            return ParseOutcome.failed();
         }
         Map<String, Object> json;
         try {
@@ -131,12 +127,13 @@ public class ConflictLlmJudge {
             }
         } catch (Exception e) {
             log.warn("Conflict judge 输出非法 JSON，按无冲突放行: raw={}", raw);
-            return Optional.empty();
+            return ParseOutcome.failed();
         }
 
         Object conflict = json.get("conflict");
         if (conflict == null || !Boolean.TRUE.equals(conflict)) {
-            return Optional.empty();
+            // 解析成功但判定无冲突，属正常结果
+            return ParseOutcome.noConflict();
         }
 
         String entity = toString(json.get("entity"));
@@ -154,12 +151,33 @@ public class ConflictLlmJudge {
                     || !expected.contains(chunkIdA) || !expected.contains(chunkIdB)) {
                 log.warn("Conflict judge 返回 chunkId 不在候选集内，丢弃: chunkIdA={} chunkIdB={} expected={}",
                         chunkIdA, chunkIdB, expected);
-                return Optional.empty();
+                return ParseOutcome.failed();
+            }
+            // LLM 以 (B, A) 顺序返回时，valueA/valueB 随 id 一并交换，保证规整后 id 与值对应
+            if (chunkIdA.equals(expectedB)) {
+                String tmp = valueA;
+                valueA = valueB;
+                valueB = tmp;
             }
         }
 
         // 始终规整为输入对 (expectedA, expectedB) 的顺序，避免下游误判方向
-        return Optional.of(new ConflictVerdict(expectedA, expectedB, entity, attribute, valueA, valueB));
+        return ParseOutcome.ok(new ConflictVerdict(expectedA, expectedB, entity, attribute, valueA, valueB));
+    }
+
+    /** 解析结果：ok 表示 LLM 输出被成功解析且通过校验（含 conflict=false 的正常无冲突）。 */
+    private record ParseOutcome(boolean ok, Optional<ConflictVerdict> verdict) {
+        static ParseOutcome ok(ConflictVerdict verdict) {
+            return new ParseOutcome(true, Optional.of(verdict));
+        }
+
+        static ParseOutcome noConflict() {
+            return new ParseOutcome(true, Optional.empty());
+        }
+
+        static ParseOutcome failed() {
+            return new ParseOutcome(false, Optional.empty());
+        }
     }
 
     private static String toString(Object o) {
