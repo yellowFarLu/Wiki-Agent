@@ -83,7 +83,7 @@ class DocumentControllerTest {
         when(taskQuery.findByBizKey(any())).thenReturn(Optional.of(task("tsk-1", TaskStatus.COMPLETED, "doc-1")));
         when(docRepo.findById("doc-1")).thenReturn(Optional.of(orig));
 
-        DocumentView view = controller.upload(file(), null, null, null, null);
+        DocumentView view = controller.upload(file(), null, null, null, null, null);
 
         assertThat(view.id()).isEqualTo("doc-1");
         assertThat(view.taskId()).isEqualTo("tsk-1");
@@ -99,7 +99,7 @@ class DocumentControllerTest {
         when(docRepo.findById("doc-deleted")).thenReturn(Optional.empty());
         when(submission.submit(any())).thenAnswer(inv -> submittedTask(inv.<TaskPayload>getArgument(0).bizKey()));
 
-        DocumentView view = controller.upload(file(), null, null, null, null);
+        DocumentView view = controller.upload(file(), null, null, null, null, null);
 
         ArgumentCaptor<TaskPayload> captor = ArgumentCaptor.forClass(TaskPayload.class);
         verify(submission).submit(captor.capture());
@@ -122,7 +122,7 @@ class DocumentControllerTest {
         when(docRepo.findById("doc-failed")).thenReturn(Optional.of(orig));
         when(submission.submit(any())).thenAnswer(inv -> submittedTask(inv.<TaskPayload>getArgument(0).bizKey()));
 
-        DocumentView view = controller.upload(file(), null, null, null, null);
+        DocumentView view = controller.upload(file(), null, null, null, null, null);
 
         assertThat(view.id()).isNotEqualTo("doc-failed");
         assertThat(view.duplicate()).isFalse();
@@ -134,7 +134,7 @@ class DocumentControllerTest {
         when(taskQuery.findByBizKey(any())).thenReturn(Optional.empty());
         when(submission.submit(any())).thenAnswer(inv -> submittedTask(inv.<TaskPayload>getArgument(0).bizKey()));
 
-        DocumentView view = controller.upload(file(), null, null, null, null);
+        DocumentView view = controller.upload(file(), null, null, null, null, null);
 
         ArgumentCaptor<TaskPayload> captor = ArgumentCaptor.forClass(TaskPayload.class);
         verify(submission).submit(captor.capture());

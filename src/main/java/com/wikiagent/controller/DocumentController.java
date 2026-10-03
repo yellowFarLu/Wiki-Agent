@@ -31,6 +31,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.UUID;
 
@@ -59,6 +62,7 @@ public class DocumentController {
     public DocumentView upload(@RequestParam("file") MultipartFile file,
                                @RequestParam(required = false) String domain,
                                @RequestParam(required = false) String subDomain,
+                               @RequestParam(required = false) String effectiveDate,
                                @RequestHeader(value = "X-User-Id", required = false) String userId,
                                @RequestHeader(value = "X-Business-Identity", required = false) String identity)
             throws IOException {
@@ -81,6 +85,8 @@ public class DocumentController {
         if (identity != null && !isValidIdentity(identity)) {
             throw new IllegalArgumentException("非法业务身份 identity=" + identity);
         }
+        // 子项目 G：生效日期解析（冲突裁决依据）；缺省=服务器当前日期，非法格式 → 400
+        LocalDate effective = resolveEffectiveDate(effectiveDate);
 
         String owner = userId == null ? "anonymous" : userId;
         byte[] bytes = file.getBytes();
@@ -88,7 +94,7 @@ public class DocumentController {
         // 任务框架路径：bizKey=ingest:{sha256}:{userId} 幂等提交，六步流水线异步执行
         if (submission.getIfAvailable() != null) {
             return uploadViaTask(bytes, filename, ext, owner,
-                    domain, subDomain, identity);
+                    domain, subDomain, identity, effective);
         }
 
         // 旧异步路径（task.enabled=false）：@Async 入库，行为不变
@@ -111,6 +117,10 @@ public class DocumentController {
         doc.setDocType(ext);
         doc.setSizeBytes(bytes.length);
         doc.setStatus(KbDocument.PARSING);
+        // 同步路径直接落库生效日期三要素
+        doc.setEffectiveDate(effective);
+        doc.setEffectiveSetBy(owner);
+        doc.setEffectiveSetAt(Instant.now());
         docRepo.save(doc);
 
         ingestionService.ingest(docId, filename, bytes, tagContext);
@@ -119,7 +129,8 @@ public class DocumentController {
 
     /** 任务框架路径：同内容同人重复上传 → 命中 bizKey 幂等，返回既有 taskId 不重复入库。 */
     private DocumentView uploadViaTask(byte[] bytes, String filename, String ext, String owner,
-                                       String domain, String subDomain, String identity) throws IOException {
+                                       String domain, String subDomain, String identity,
+                                       LocalDate effective) throws IOException {
         String docId = UUID.randomUUID().toString();
         String bizKey = "ingest:" + sha256Hex(bytes) + ":" + owner;
         var existing = taskQueryAvailable().findByBizKey(bizKey);
@@ -150,7 +161,9 @@ public class DocumentController {
         ObjectNode args = MAPPER.createObjectNode()
                 .put("docId", docId)
                 .put("filename", filename)
-                .put("userId", owner);
+                .put("userId", owner)
+                // 生效日期经 payload 透传，由 IngestTaskHandler 落库（setBy=userId）
+                .put("effectiveDate", effective.toString());
         if (domain != null) {
             args.put("domain", domain);
         }
@@ -191,6 +204,19 @@ public class DocumentController {
             return sb.toString();
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 不可用", e);
+        }
+    }
+
+    /** 生效日期解析：ISO-8601 yyyy-MM-dd；缺省/空白 → 服务器当前日期；非法格式 → IllegalArgumentException(400)。 */
+    private static LocalDate resolveEffectiveDate(String effectiveDate) {
+        if (effectiveDate == null || effectiveDate.isBlank()) {
+            return LocalDate.now();
+        }
+        try {
+            return LocalDate.parse(effectiveDate.trim());
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException(
+                    "非法生效日期格式（应为 yyyy-MM-dd）: " + effectiveDate, e);
         }
     }
 

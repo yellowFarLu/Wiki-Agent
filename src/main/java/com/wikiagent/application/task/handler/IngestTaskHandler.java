@@ -128,7 +128,7 @@ public class IngestTaskHandler implements TaskHandler {
         String docId = args.path("docId").asText();
         String filename = args.path("filename").asText();
         return switch (ctx.currentStepNo()) {
-            case 1 -> download(docId, filename);
+            case 1 -> download(docId, filename, args);
             case 2 -> parse(ctx, docId, filename);
             case 3 -> clean(docId);
             case 4 -> split(args, docId, filename);
@@ -141,11 +141,12 @@ public class IngestTaskHandler implements TaskHandler {
         };
     }
 
-    private StepResult download(String docId, String filename) {
+    private StepResult download(String docId, String filename, JsonNode args) {
         Path file = uploadPath(docId, filename);
         if (!Files.exists(file)) {
             throw new FatalTaskException(ErrorCode.VALIDATION_FAILED, "上传文件不存在: " + file);
         }
+        applyEffectiveDate(docId, args);
         try {
             byte[] bytes = Files.readAllBytes(file);
             if (bytes.length == 0) {
@@ -159,6 +160,22 @@ public class IngestTaskHandler implements TaskHandler {
             throw e;
         } catch (Exception e) {
             throw new FatalTaskException(ErrorCode.INTERNAL, "读取上传文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 子项目 G Task 8：payload.effectiveDate 落库（任务框架路径由 controller 透传）。
+     * 解析失败视为不可重试的数据校验错误（VALIDATION_FAILED），不阻断文件存在性校验语义。
+     */
+    private void applyEffectiveDate(String docId, JsonNode args) {
+        String text = args == null ? null : args.path("effectiveDate").asText(null);
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        try {
+            ingestion.applyEffectiveDateStep(docId, text, args.path("userId").asText("anonymous"));
+        } catch (IllegalArgumentException e) {
+            throw new FatalTaskException(ErrorCode.VALIDATION_FAILED, e.getMessage(), e);
         }
     }
 

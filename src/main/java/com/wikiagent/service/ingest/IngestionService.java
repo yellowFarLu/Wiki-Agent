@@ -627,6 +627,29 @@ public class IngestionService {
         log.warn("文档入库失败（任务终态）: docId={} filename={} error={}", docId, doc.getFilename(), errorMsg);
     }
 
+    /**
+     * 子项目 G Task 8：任务框架路径生效日期落库（payload.effectiveDate 透传）。
+     * 幂等——已设置过则不覆盖，保留上传时刻的审计信息（setBy/setAt）。
+     * 非法格式抛 IllegalArgumentException，由 handler 归类 VALIDATION_FAILED。
+     */
+    public void applyEffectiveDateStep(String docId, String effectiveDate, String setBy) {
+        KbDocument doc = requireDoc(docId);
+        if (doc.getEffectiveDate() != null) {
+            return;
+        }
+        java.time.LocalDate date;
+        try {
+            date = java.time.LocalDate.parse(effectiveDate);
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException(
+                    "非法生效日期格式（应为 yyyy-MM-dd）: " + effectiveDate, e);
+        }
+        doc.setEffectiveDate(date);
+        doc.setEffectiveSetBy(setBy);
+        doc.setEffectiveSetAt(java.time.Instant.now());
+        docRepo.save(doc);
+    }
+
     /** 全流水线（同步、异常上抛由调用方分类）：任务 handler 与旧异步入口共用。 */
     public IngestOutcome runPipeline(String docId, String filename, byte[] bytes, KnowledgeTagContext tagContext) {
         String raw = parseStep(docId, filename, bytes);

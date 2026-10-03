@@ -84,11 +84,13 @@ export async function uploadDocument(
   file: File,
   domain?: string,
   subDomain?: string,
+  effectiveDate?: string,
 ): Promise<DocumentView> {
   const form = new FormData();
   form.append('file', file);
   if (domain) form.append('domain', domain);
   if (subDomain) form.append('subDomain', subDomain);
+  if (effectiveDate) form.append('effectiveDate', effectiveDate);
   const res = await fetch('/api/documents', {
     method: 'POST',
     headers: authHeaders(),

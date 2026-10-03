@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Alert, App, Card, Select, Space, Typography, Upload } from 'antd';
+import { Alert, App, Card, DatePicker, Select, Space, Typography, Upload } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
 import Link from 'next/link';
+import dayjs, { type Dayjs } from 'dayjs';
 import type { UploadProps } from 'antd';
 import { uploadDocument } from '@/lib/api';
 import { DOMAIN_OPTIONS, getSettings, SUB_DOMAIN_OPTIONS } from '@/lib/settings';
@@ -22,6 +23,7 @@ export default function UploadPanel({ onUploaded }: { onUploaded: () => void }) 
   const [results, setResults] = useState<UploadResult[]>([]);
   const [domain, setDomain] = useState<string | undefined>(undefined);
   const [subDomain, setSubDomain] = useState<string | undefined>(undefined);
+  const [effectiveDate, setEffectiveDate] = useState<Dayjs>(dayjs());
 
   const doUpload = async (file: File) => {
     const key = `${file.name}-${Date.now()}-${Math.random()}`;
@@ -30,7 +32,12 @@ export default function UploadPanel({ onUploaded }: { onUploaded: () => void }) 
     const effectiveDomain = domain || settings.domain || undefined;
     const effectiveSubDomain = subDomain || settings.subDomain || undefined;
     try {
-      const doc = await uploadDocument(file, effectiveDomain, effectiveSubDomain);
+      const doc = await uploadDocument(
+        file,
+        effectiveDomain,
+        effectiveSubDomain,
+        effectiveDate.format('YYYY-MM-DD'),
+      );
       setResults((prev) =>
         prev.map((r) =>
           r.key === key
@@ -82,6 +89,14 @@ export default function UploadPanel({ onUploaded }: { onUploaded: () => void }) 
           value={subDomain}
           onChange={(v) => setSubDomain(v)}
         />
+        <Typography.Text type="secondary">生效日期：</Typography.Text>
+        <DatePicker
+          style={{ width: 160 }}
+          allowClear={false}
+          value={effectiveDate}
+          onChange={(v) => setEffectiveDate(v ?? dayjs())}
+        />
+        <Typography.Text type="secondary">文档内容生效日期，冲突时以此为准</Typography.Text>
       </Space>
       <Upload.Dragger {...props}>
         <p className="ant-upload-drag-icon">
