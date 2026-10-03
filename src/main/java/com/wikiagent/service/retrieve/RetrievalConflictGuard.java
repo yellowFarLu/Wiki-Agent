@@ -41,7 +41,8 @@ import java.util.Set;
  *       不默认选边（Review Focus #1/#4）</li>
  *   <li>传递冲突组（A~B、B~C）按并查集并为一组统一裁决</li>
  * </ul>
- * 门控：{@code wikiagent.conflict.guard.enabled}（默认 false）且灰度特性
+ * 门控：{@code wikiagent.conflict-guard.enabled}（默认 false；虚线式扁平名，
+ * {@code wikiagent.conflict.*} 已被离线扫描占用）且灰度特性
  * {@code conflict-guard} 命中当前请求身份才生效；否则原样透传零副作用。
  * <p>
  * <b>诚实声明 / fail-open</b>：守卫内部任何异常（embed 失败、DAO 异常等）一律
@@ -82,7 +83,7 @@ public class RetrievalConflictGuard {
     private final EmbeddingModel embeddingModel;
     /** embedding 精确缓存（可选，缺席时直调模型）。 */
     private final EmbeddingCacheService embeddingCache;
-    /** LLM 精判（可选；bean 仅在 wikiagent.conflict.guard.enabled=true 时装配）。 */
+    /** LLM 精判（可选；bean 仅在 wikiagent.conflict-guard.enabled=true 时装配）。 */
     private final ConflictLlmJudge judge;
     /** 灰度决策（可选，缺失时不门控）。 */
     private final GrayReleaseService grayRelease;

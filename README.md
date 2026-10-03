@@ -308,6 +308,34 @@ PENDING ─► DISPATCH ─► RUNNING ─┬─► COMPLETED ✅
 - **知识标签**：`KnowledgeTaggingService` 自动/人工打标，配合业务域隔离
 - 看板 API：`/api/metrics/dashboard|/aggregation|/knowledge|/chunk/{id}`，空快照已修复 NPE
 
+#### 近重复与冲突防御（入库去重 + 检索冲突守卫）
+
+解决"两条相似知识只差一个字"造成的冗余与幻觉风险（如旧文"苹果5元"与新文"苹果3元"）。五层防御纵深：
+
+| 层 | 组件 | 行为 |
+|---|---|---|
+| L0 精确去重 | `IngestionService.applyExactDedup` | chunk 正文规范化 SHA-256 `content_hash`；splitStep **同事务内**跨文档查重，命中按生效时间留晚者（相同/缺失留旧），软删 + 打点 `DEDUP_EXACT_SKIPPED` |
+| L1 近重复守卫 | `NearDuplicateGuard` + `MinHashSignature` + `RedisLshIndex` + `KeyTokenDiffer` | 128 perm MinHash 签名 → Redis 32 bands × 4 rows 分桶粗筛 → 桶内精确 jaccard ≥ 0.9 认定近重复 → **关键 token 分流**（数字/日期/货币/否定词）：非关键差异自动合并（生效日晚者留，打点 `DEDUP_NEAR_MERGED`）；关键差异双方不动、写冲突单 `source=MINHASH_INGEST` 转人工 |
+| 检索粗筛 | `ConflictCandidateDetector` | rerank 后对候选代表子块 O(k²) 余弦 ≥ 0.85 + 关键 token 复判，零 LLM 成本过滤无疑似对 |
+| LLM 精判 | `ConflictLlmJudge`（qwen-flash） | 结构化 JSON 判断"是否同一实体同一属性给出不同事实值"，**只检测不裁决** |
+| 确定性裁决 | `RetrievalConflictGuard` | 按 `kb_document.effective_date` 唯一权威信号移除输家 chunk（晚者胜；生效时间相同/缺失**不自动选边**，双保留 + 上下文标注 + 冲突单 `source=ONLINE_GUARD`），兜底走 `ConflictResolutionService` 人工仲裁（KEEP_A/B、MERGE、DELETE_A/B） |
+
+**两个开关（默认均关闭，显式开启才生效）**：
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `wikiagent.dedup.enabled` | false | L0+L1 入库侧总开关（`near-jaccard` 默认 0.9） |
+| `wikiagent.conflict-guard.enabled` | false | 检索侧守卫总开关（含精判 Bean 装配；`coarse-cosine` 默认 0.85）。注意为**虚线式扁平名**：`wikiagent.conflict.*` 命名空间已被离线扫描占用 |
+| `wikiagent.gray.features.conflict-guard.*` | 未配置=全量 | 守卫叠加请求级灰度门控（稳定分桶，见模块 13） |
+
+**生效时间录入约定**：上传 `POST /api/documents` 传 `effectiveDate=yyyy-MM-dd`（缺省=服务器当天，非法格式 400）；任务框架路径经 payload 透传落库，已设置不覆盖（幂等）。存量迁移前文档 `effective_date` 可为 null → 裁决不选边、双保留。
+
+**诚实声明**：
+- MinHash 是**概率近似**：0.9 阈值 + LSH 分桶只保证高相似对大概率召回，边界样本可能漏检——关键 token 分流与在线守卫是其安全网；
+- LLM 精判 **fail-open**：异常/超时/非法 JSON/候选集外 chunkId 一律按"无冲突"放行并告警，绝不阻断问答主链路（守卫整体同语义，内部任何异常原样透传）；
+- Redis 不可用时 L1 降级为跳过检测并告警，**不阻断入库**；
+- 所有"移除"都是 MySQL `is_active=false` 软删（Milvus 无 chunk 级删除 API），冲突单 + `metric_event`（`CONFLICT_GUARD_DETECTED/REMOVED/KEPT_BOTH`）全程可审计；同一 chunk 对（无序）已持任意状态冲突单时不重复报单。
+
 ### 🔟 数据血缘与版本
 
 - Artifact 链：`RAW_FILE → PARSED_TEXT → CLEANED_TEXT → PARENT_CHUNK → CHILD_CHUNK → FIELD`，旁路 `OCR_PAGE / STITCHED_TABLE`；关系存 `provenance_edge`，节点存 `doc_artifact`

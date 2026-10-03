@@ -8,7 +8,17 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record WikiAgentProperties(Milvus milvus, Retrieve retrieve, Ingest ingest, Agent agent,
                                   Dedup dedup, ConflictGuard conflictGuard) {
 
-    /** 绑定构造：存在多个构造器时必须显式标注，否则 Spring 回退找无参构造而实例化失败。 */
+    /**
+     * 绑定构造：存在多个构造器时必须显式标注，否则 Spring 回退找无参构造而实例化失败。
+     * <p>
+     * Task 10 E2E 修复（wiring 遗漏）：{@code conflictGuard} 改用 <b>虚线式扁平名</b>
+     * {@code wikiagent.conflict-guard.*} 绑定。原因：{@code wikiagent.conflict} 命名空间
+     * 已被每日扫描配置（threshold/scan-cron）占用，{@code wikiagent.conflict.guard.enabled}
+     * 的 {@code conflict.guard} 是两级路径，无法绑定到单级组件 {@code conflictGuard}
+     * （E2E 实测：文档化开关设 true 时 judge 条件 Bean 装配但守卫 record 为 null →
+     * 恒透传）。双点泾渭分明：{@code wikiagent.conflict.*}=离线扫描，
+     * {@code wikiagent.conflict-guard.*}=检索侧守卫。
+     */
     @ConstructorBinding
     public WikiAgentProperties {
     }

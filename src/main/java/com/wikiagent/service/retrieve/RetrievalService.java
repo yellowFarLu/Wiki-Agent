@@ -133,7 +133,7 @@ public class RetrievalService {
     /** GraphRAG 服务（可选，wikiagent.graph.enabled=true 时注入）。 */
     private final com.wikiagent.application.graph.GraphRagService graphRagService;
 
-    /** Task 7 检索侧冲突守卫（可选；内部按 wikiagent.conflict.guard.enabled + 灰度门控）。 */
+    /** Task 7 检索侧冲突守卫（可选；内部按 wikiagent.conflict-guard.enabled + 灰度门控）。 */
     private final RetrievalConflictGuard conflictGuard;
 
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
