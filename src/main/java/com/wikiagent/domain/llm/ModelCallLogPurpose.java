@@ -5,7 +5,9 @@ package com.wikiagent.domain.llm;
  */
 public enum ModelCallLogPurpose {
     /** 规则确定性计算用途标记（AC-D3：规则引擎零 LLM，正常计算不应产生该打点）。 */
-    INTENT, EXTRACT, CHAT, RERANK, JUDGE, RULED;
+    INTENT, EXTRACT, CHAT, RERANK, JUDGE, RULED,
+    /** ConflictGuard 精判（qwen-flash 结构化冲突判定，Task 6）。 */
+    CONFLICT_JUDGE;
 
     public static ModelCallLogPurpose from(String raw) {
         if (raw == null) {
