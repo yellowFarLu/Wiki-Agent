@@ -286,7 +286,7 @@ wikiagent:
     retry-backoff-base-ms: 500
     circuit-open-sec: 60
     circuit-failure-threshold: 3
-    vision-model: qwen-vl-max
+    vision-model: qwen-vl-plus
     asr-model: paraformer-v2
     # ASR 要求文件公网可访问；部署 OSS 后配置前缀（如 https://bucket.oss.../audio），留空则 ASR 能力不可用
     asr-file-base-url: ${WIKIAGENT_PARSE_ASR_BASE_URL:}

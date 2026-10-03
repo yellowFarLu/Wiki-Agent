@@ -42,12 +42,20 @@ public class PageConflictDetector {
     /**
      * 文本层疑似乱码（触发与 OCR 双跑的窄门）：U+FFFD 占比高或不可打印控制符占比高。
      * 正常扫描页（文本极少）由扫描阈值走纯 OCR，不进本路径。
+     * <p>
+     * U+0000 单列阈值：PDFBox 抽取内嵌字体时常产出 U+0000 占位符（字形映射缺失），
+     * 属于伪影而非真乱码；真乱码指示符为 U+FFFD（替换字符）与其他 ISO 控制符。
+     * U+0000 需占比显著更高（25%）才视为乱码，避免误判字体映射缺陷页。
      */
+    static final double NUL_GARBLED_THRESHOLD = 0.25;
+    static final double GARBLED_THRESHOLD = 0.1;
+
     public static boolean looksGarbled(String text) {
         if (text == null || text.isBlank()) {
             return false;
         }
-        int bad = 0;
+        int fffdOrControl = 0;
+        int nul = 0;
         int meaningful = 0;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
@@ -55,10 +63,14 @@ public class PageConflictDetector {
                 continue;
             }
             meaningful++;
-            if (c == '�' || (Character.isISOControl(c))) {
-                bad++;
+            if (c == '\uFFFD' || (Character.isISOControl(c) && c != '\u0000')) {
+                fffdOrControl++;
+            } else if (c == '\u0000') {
+                nul++;
             }
         }
-        return meaningful >= 10 && (double) bad / meaningful >= 0.1;
+        return meaningful >= 10
+                && ((double) fffdOrControl / meaningful >= GARBLED_THRESHOLD
+                || (double) nul / meaningful >= NUL_GARBLED_THRESHOLD);
     }
 }

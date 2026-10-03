@@ -45,8 +45,8 @@ public class ParseProperties {
     /** 连续失败多少次后打开熔断。 */
     private int circuitFailureThreshold = 3;
 
-    /** 视觉模型（OCR/版面/表格）。 */
-    private String visionModel = "qwen-vl-max";
+    /** 视觉模型（OCR/版面/表格）。plus 比 max 快 2~3.5 倍且单价更低，中文印刷体 OCR 质量差异可忽略。 */
+    private String visionModel = "qwen-vl-plus";
 
     /** 语音转写模型。 */
     private String asrModel = "paraformer-v2";

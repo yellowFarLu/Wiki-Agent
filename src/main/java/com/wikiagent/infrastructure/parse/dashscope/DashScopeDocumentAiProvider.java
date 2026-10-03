@@ -63,10 +63,11 @@ public class DashScopeDocumentAiProvider implements DocumentAiProvider {
 
     @Override
     public OcrResult ocr(OcrRequest request) {
+        // 只取 fullText/confidence：spans/bbox 全链路无消费者，要求它们会让输出 token 翻倍、
+        // 密集页在 qwen-vl-max 上超 60s 必触发 30s 超时（实测 68s vs 精简后 18s）
         String json = vision.visionJson(request.imageBytes(), request.mimeType(), """
                 对图片做 OCR 识别，只输出 JSON，不要输出任何解释或 Markdown：
-                {"fullText":"整页识别文本","spans":[{"text":"文本片段","confidence":0.0到1.0,"bbox":[x,y,w,h]}],"confidence":0.0到1.0}
-                bbox 为像素坐标，无法定位的片段 bbox 传 null。
+                {"fullText":"整页识别文本","confidence":0.0到1.0}
                 """);
         return DashScopeVisionResultParser.parseOcr(json, request.pageNo());
     }

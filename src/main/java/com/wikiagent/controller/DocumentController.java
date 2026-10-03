@@ -120,18 +120,21 @@ public class DocumentController {
     /** 任务框架路径：同内容同人重复上传 → 命中 bizKey 幂等，返回既有 taskId 不重复入库。 */
     private DocumentView uploadViaTask(byte[] bytes, String filename, String ext, String owner,
                                        String domain, String subDomain, String identity) throws IOException {
+        String docId = UUID.randomUUID().toString();
         String bizKey = "ingest:" + sha256Hex(bytes) + ":" + owner;
         var existing = taskQueryAvailable().findByBizKey(bizKey);
         if (existing.isPresent()) {
             TaskInstance task = existing.get();
             String origDocId = task.payload() == null ? null : task.payload().path("docId").asText(null);
             KbDocument orig = origDocId == null ? null : docRepo.findById(origDocId).orElse(null);
-            if (orig != null) {
+            if (orig != null && !KbDocument.FAILED.equals(orig.getStatus())) {
                 return DocumentView.of(orig, task.taskId(), true);
             }
+            // 首次入库失败或原文档已删：以新 docId 派生新 bizKey 重新入库。
+            // 若沿用旧 bizKey，submit 会幂等返回已终态（FAILED/CANCELLED）的旧任务，新文档永远无人执行
+            bizKey = bizKey + ":retry:" + docId;
         }
 
-        String docId = UUID.randomUUID().toString();
         Path dir = Path.of("data", "uploads", docId);
         Files.createDirectories(dir);
         Files.write(dir.resolve(filename), bytes);

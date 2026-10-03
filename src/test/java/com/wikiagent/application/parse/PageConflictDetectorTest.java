@@ -67,4 +67,34 @@ class PageConflictDetectorTest {
         String garbled = "锟斤拷\u0000烫烫烫\u0000乱码\u0000内容\u0000测试\u0000数据\u0000ABC".repeat(2);
         assertThat(PageConflictDetector.looksGarbled(garbled)).isTrue();
     }
+
+    @Test
+    void scatteredNulArtifactsFromFontMappingAreNotGarbled() {
+        // 真实案例：课件 PDF 内嵌字体 cmap 缺陷，3047 字符中散点分布 310 个 U+0000（10.2%），
+        // 文本层内容完全可读，不应触发 OCR 双跑
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 100; i++) {
+            sb.append("page_content=3、实验 ");
+        }
+        String readable = sb.toString();
+        String withNulArtifacts = readable.replace(" ", "\u0000");
+        assertThat(withNulArtifacts.chars().filter(c -> c == '\u0000').count()).isEqualTo(100);
+        assertThat(PageConflictDetector.looksGarbled(withNulArtifacts)).isFalse();
+    }
+
+    @Test
+    void denseNulRatioStillCountsAsGarbled() {
+        // U+0000 占比 ≥25% 才视为乱码（字体映射彻底损坏、文本层不可信的场景）
+        String denseNul = "锟斤拷\u0000烫烫烫\u0000乱码\u0000内容\u0000测试\u0000数据\u0000ABC".repeat(2);
+        assertThat(PageConflictDetector.looksGarbled(denseNul)).isTrue();
+    }
+
+    @Test
+    void fffdReplacementCharStillTriggersAtLowThreshold() {
+        // U+FFFD 是真乱码信号，保持 10% 阈值
+        String fffd = "正常文本内容替换字符测试数据ABCDE".replace("换", "\uFFFD");
+        assertThat(PageConflictDetector.looksGarbled(fffd)).isFalse();
+        String heavyFffd = "正常文\uFFFD内容\uFFFD换字符\uFFFD试数据\uFFFDBCDE";
+        assertThat(PageConflictDetector.looksGarbled(heavyFffd)).isTrue();
+    }
 }

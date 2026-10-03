@@ -37,7 +37,13 @@ public class DashScopeVisionClient {
                 DashScopeApi api = DashScopeApi.builder().apiKey(apiKey.trim()).build();
                 this.chatModel = DashScopeChatModel.builder()
                         .dashScopeApi(api)
-                        .defaultOptions(DashScopeChatOptions.builder().model(model).build())
+                        // multiModel=true 才会路由到 /multimodal-generation/generation；
+                        // 缺省 false 会把图片消息发到 text-generation 端点，服务端报
+                        // "url error, please check url！"（错误码文档 #error-url 原因一）
+                        .defaultOptions(DashScopeChatOptions.builder()
+                                .model(model)
+                                .multiModel(true)
+                                .build())
                         .build();
             } catch (Exception e) {
                 this.initFailed = true;
