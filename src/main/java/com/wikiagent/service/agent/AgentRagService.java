@@ -247,7 +247,8 @@ public class AgentRagService {
                         String.join(" / ", queries), null, "ERROR", e.getMessage());
                 throw e;
             }
-            result = retrieval.assemble(acc);
+            // 必须传原始 question：一参 assemble 会以 null query 跳过 rerank 与冲突守卫
+            result = retrieval.assemble(acc, question);
             traceRecorder.record(userId, sessionId, "agent-rag-retrieval-r" + round, "tool_call",
                     String.join(" / ", queries),
                     "sources=" + result.sources().size() + (result.context().isEmpty() ? ", context=EMPTY" : ""),

@@ -115,7 +115,7 @@ class AgentRagAnswerCacheTest {
         sse = new SseSender(emitter);
 
         when(retrieval.newAccumulator()).thenReturn(new RetrievalService.Accumulator());
-        when(retrieval.assemble(any())).thenReturn(new RetrievalService.RetrievalResult(
+        when(retrieval.assemble(any(), any())).thenReturn(new RetrievalService.RetrievalResult(
                 List.of(new RetrievalService.Source(1, "d1", 1, 1, "片段", null, 0.9, "f.md")),
                 "证据"));
         when(chatModel.call(any(Prompt.class)))

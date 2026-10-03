@@ -56,7 +56,7 @@ class AgentRagPromptVersionTest {
         traceRecorder = mock(RagTraceRecorder.class);
         sse = new SseSender(mock(SseEmitter.class));
         when(retrieval.newAccumulator()).thenReturn(new RetrievalService.Accumulator());
-        when(retrieval.assemble(any())).thenReturn(new RetrievalService.RetrievalResult(
+        when(retrieval.assemble(any(), any())).thenReturn(new RetrievalService.RetrievalResult(
                 List.of(new RetrievalService.Source(1, "doc1", 1, null, "片段", null, 0.9, "a.md")),
                 "证据"));
         when(chatModel.call(any(Prompt.class)))

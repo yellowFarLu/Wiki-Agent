@@ -115,7 +115,7 @@ class AgentRagServiceTest {
     @Test
     void 规划的多查询应在一轮内全部检索并去重累积() {
         llmReturns("{\"mode\":\"search\",\"queries\":[\"报销时限\",\"差旅标准\"]}", GRADE_OK);
-        when(retrieval.assemble(any())).thenReturn(result("证据"));
+        when(retrieval.assemble(any(), any())).thenReturn(result("证据"));
 
         service.run("u1", "s1", "报销时限和差旅标准是什么？", sse);
 
@@ -134,7 +134,7 @@ class AgentRagServiceTest {
                 "{\"mode\":\"search\",\"queries\":[\"q1\"]}",
                 "{\"sufficient\":false,\"refinedQuery\":\"q2 更好\"}",
                 GRADE_OK);
-        when(retrieval.assemble(any())).thenReturn(result("第一轮证据"), result("第二轮证据"));
+        when(retrieval.assemble(any(), any())).thenReturn(result("第一轮证据"), result("第二轮证据"));
 
         service.run("u1", "s1", "问题", sse);
 
@@ -155,7 +155,7 @@ class AgentRagServiceTest {
         service = new AgentRagService(oneRound, chatModel, retrieval, rewriter, streamer,
                 fallback, traceRecorder);
         llmReturns("{\"mode\":\"search\",\"queries\":[\"q1\"]}", GRADE_OK);
-        when(retrieval.assemble(any())).thenReturn(result("证据"));
+        when(retrieval.assemble(any(), any())).thenReturn(result("证据"));
 
         service.run("u1", "s1", "问题", sse);
 
@@ -168,7 +168,7 @@ class AgentRagServiceTest {
     @Test
     void 规划输出无法解析时应降级为原始问题检索() {
         llmReturns("抱歉，我不会输出 JSON");
-        when(retrieval.assemble(any())).thenReturn(result("证据"));
+        when(retrieval.assemble(any(), any())).thenReturn(result("证据"));
 
         service.run("u1", "s1", "原始问题", sse);
 
@@ -182,7 +182,7 @@ class AgentRagServiceTest {
     @Test
     void 证据为空时应改写重检最终进入未命中兜底() {
         llmReturns("{\"mode\":\"search\",\"queries\":[\"q1\"]}");
-        when(retrieval.assemble(any())).thenReturn(result(""));
+        when(retrieval.assemble(any(), any())).thenReturn(result(""));
         when(rewriter.rewrite("问题")).thenReturn("改写后的问题");
 
         service.run("u1", "s1", "问题", sse);
@@ -206,7 +206,7 @@ class AgentRagServiceTest {
         llmReturns("{\"mode\":\"search\",\"queries\":[\"年假\"]}",
                 "{\"sufficient\":false,\"refinedQuery\":\"\"}");
         // Milvus 总会返回 topK 近邻（无阈值），context 非空但不相关
-        when(retrieval.assemble(any())).thenReturn(result("一份无关的简历内容"));
+        when(retrieval.assemble(any(), any())).thenReturn(result("一份无关的简历内容"));
 
         service.run("u1", "s1", "公司年假制度是怎样的？", sse);
 
@@ -217,7 +217,7 @@ class AgentRagServiceTest {
     @Test
     void 最终回答应使用证据与原始问题组装的提示词() {
         llmReturns("{\"mode\":\"search\",\"queries\":[\"q1\"]}", GRADE_OK);
-        when(retrieval.assemble(any())).thenReturn(result("[1] 来源: a.md\n事实内容"));
+        when(retrieval.assemble(any(), any())).thenReturn(result("[1] 来源: a.md\n事实内容"));
 
         service.run("u1", "s1", "问题", sse);
 

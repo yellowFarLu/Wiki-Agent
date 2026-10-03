@@ -641,7 +641,7 @@ public class RetrievalService {
         }
     }
 
-    /** 累积器 → 父文档上下文：H2 回查父块全文与来源文件名，字符预算内按命中顺序编号组装。 */
+    /** 累积器 → 父文档上下文。注意：此重载以 null query 组装，<b>跳过 rerank 与冲突守卫</b>；需要守卫的调用方必须传 query。 */
     public RetrievalResult assemble(Accumulator acc) {
         return assemble(acc, null);
     }
