@@ -1,5 +1,6 @@
 package com.wikiagent.application.knowledge;
 
+import com.wikiagent.application.knowledge.dedup.KeyTokenDiffer;
 import com.wikiagent.entity.KbChildChunk;
 import com.wikiagent.infrastructure.persistence.ConflictResolutionEntity;
 import com.wikiagent.infrastructure.persistence.ConflictResolutionJpaDao;
@@ -30,7 +31,9 @@ import java.util.Set;
  *   <li>按 (domainTag, subDomainTag) 垂直分组——冲突只可能发生在同一知识领域内</li>
  *   <li>组内对子 chunk 计算 embedding 余弦相似度（代码冲突解决页面的相似度依据）</li>
  *   <li>相似度 &gt; {@code wikiagent.conflict.threshold}（默认 0.8）且该 chunk 对
- *       未存在任何状态的冲突记录时，写入 conflict_resolution（status=DETECTED）</li>
+ *       未存在任何状态的冲突记录时，写入 conflict_resolution（status=DETECTED,
+ *       source=SCHEDULED_SCAN）；resolution_hint 按 {@link KeyTokenDiffer} 分流：
+ *       关键 token 差异 → CONFLICT，仅虚词差异 → REDUNDANT</li>
  * </ol>
  * <p>
  * <b>诚实声明 / 已知限制</b>：
@@ -51,6 +54,15 @@ public class ConflictDetectionService {
 
     /** 向量化单批条数（DashScope 批量上限 10）。 */
     private static final int EMBED_BATCH = 10;
+
+    /** conflict_resolution.source：离线定时扫描检出（与 ONLINE_GUARD / MINHASH_INGEST 区分）。 */
+    public static final String SCAN_SOURCE = "SCHEDULED_SCAN";
+
+    /** resolution_hint：diff 区间命中关键 token（数字/日期/货币/否定词）→ 建议按冲突裁决。 */
+    public static final String HINT_CONFLICT = "CONFLICT";
+
+    /** resolution_hint：仅虚词差异 → 建议按冗余合并而非冲突裁决。 */
+    public static final String HINT_REDUNDANT = "REDUNDANT";
 
     private final KnowledgeMetadataJpaDao metadataDao;
     private final KbChildChunkRepo childRepo;
@@ -167,7 +179,7 @@ public class ConflictDetectionService {
                     if (existingPairs.contains(pairKey)) {
                         continue;
                     }
-                    saveConflict(metaByChunk.get(a), metaByChunk.get(b), a, b, sim);
+                    saveConflict(metaByChunk.get(a), metaByChunk.get(b), a, b, sim, chunkById);
                     existingPairs.add(pairKey);
                     detected++;
                 }
@@ -176,8 +188,12 @@ public class ConflictDetectionService {
         return detected;
     }
 
+    /**
+     * 写 DETECTED 冲突单：source=SCHEDULED_SCAN；resolution_hint 由 {@link KeyTokenDiffer}
+     * 对两侧正文 diff 区间判定——关键 token 差异 → CONFLICT，仅虚词差异 → REDUNDANT。
+     */
     private void saveConflict(KnowledgeMetadataEntity ma, KnowledgeMetadataEntity mb,
-                              String a, String b, double sim) {
+                              String a, String b, double sim, Map<String, KbChildChunk> chunkById) {
         ConflictResolutionEntity e = new ConflictResolutionEntity();
         e.setChunkIdA(a);
         e.setChunkIdB(b);
@@ -185,9 +201,18 @@ public class ConflictDetectionService {
         e.setDomainTag(ma != null ? ma.getDomainTag() : null);
         e.setSubDomainTag(ma != null ? ma.getSubDomainTag() : null);
         e.setStatus("DETECTED");
+        e.setSource(SCAN_SOURCE);
+        String textA = contentOf(chunkById, a);
+        String textB = contentOf(chunkById, b);
+        e.setResolutionHint(KeyTokenDiffer.hasCriticalDiff(textA, textB) ? HINT_CONFLICT : HINT_REDUNDANT);
         conflictDao.save(e);
-        log.info("检测到知识冲突: {} ~ {} sim={} domain={}/{}",
-                a, b, String.format("%.4f", sim), e.getDomainTag(), e.getSubDomainTag());
+        log.info("检测到知识冲突: {} ~ {} sim={} hint={} domain={}/{}",
+                a, b, String.format("%.4f", sim), e.getResolutionHint(), e.getDomainTag(), e.getSubDomainTag());
+    }
+
+    private static String contentOf(Map<String, KbChildChunk> chunkById, String chunkId) {
+        KbChildChunk c = chunkById.get(chunkId);
+        return c == null ? null : c.getContent();
     }
 
     private Map<String, KbChildChunk> loadChunks(Set<String> chunkIds) {

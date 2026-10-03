@@ -92,10 +92,22 @@ public class ObservabilityController {
                         && k.getCreatedAt().isBefore(Instant.now().minus(180, ChronoUnit.DAYS)))
                 .count();
         long pendingConflicts = conflictDao.findByStatus("DETECTED").size();
+        // Task 9：近 7 天去重/冲突打点按 eventType 分组计数（events 即 findSince(7d) 窗口；
+        // 五个 key 固定输出便于看板消费，其他 eventType 不计入）
+        Map<String, Long> dedupConflictEvents = new LinkedHashMap<>();
+        dedupConflictEvents.put("DEDUP_EXACT_SKIPPED", 0L);
+        dedupConflictEvents.put("DEDUP_NEAR_MERGED", 0L);
+        dedupConflictEvents.put("CONFLICT_GUARD_DETECTED", 0L);
+        dedupConflictEvents.put("CONFLICT_GUARD_REMOVED", 0L);
+        dedupConflictEvents.put("CONFLICT_GUARD_KEPT_BOTH", 0L);
+        for (MetricEventEntity e : events) {
+            dedupConflictEvents.computeIfPresent(e.getEventType(), (k, v) -> v + 1);
+        }
         dashboard.put("knowledgeDetails", Map.of(
                 "totalKnowledge", knowledge.size(),
                 "staleKnowledge", staleCount,
-                "pendingConflicts", pendingConflicts
+                "pendingConflicts", pendingConflicts,
+                "dedupConflictEvents", dedupConflictEvents
         ));
 
         // Tab 4: 反馈 + 网关审计
