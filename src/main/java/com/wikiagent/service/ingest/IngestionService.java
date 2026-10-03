@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wikiagent.application.extract.FieldExtractionService;
 import com.wikiagent.application.knowledge.KnowledgeTagContext;
 import com.wikiagent.application.knowledge.KnowledgeTaggingService;
+import com.wikiagent.application.knowledge.dedup.NearDuplicateGuard;
 import com.wikiagent.application.lineage.ProvenanceService;
 import com.wikiagent.application.parse.PageStructureService;
 import com.wikiagent.application.parse.RichDocumentParser;
@@ -86,6 +87,8 @@ public class IngestionService {
     private final boolean dedupEnabled;
     /** L0 精确去重打点 DAO（metric_event.chunkId 用真实新 chunk id）。 */
     private final MetricEventJpaDao metricEventDao;
+    /** L1 近重复守卫（可选，wikiagent.dedup.enabled=true 时生效；embedAndPersistStep 开头调用）。 */
+    private final NearDuplicateGuard nearDuplicateGuard;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 兼容旧装配（既有测试直接 new）：不接 embedding 缓存，裸调 embeddingModel。 */
@@ -98,7 +101,7 @@ public class IngestionService {
                             KnowledgeTaggingService taggingService) {
         this(props, parser, cleaner, richParser, structureService, extractionService, provenance,
                 artifactStore, docRepo, parentRepo, childRepo, milvus, embeddingModel,
-                taggingService, null, "text-embedding-v4", null, false, null);
+                taggingService, null, "text-embedding-v4", null, false, null, null);
     }
 
     /** 兼容旧装配（含 embedding 缓存）：无 GraphRAG。 */
@@ -114,10 +117,10 @@ public class IngestionService {
                             String embeddingModelName) {
         this(props, parser, cleaner, richParser, structureService, extractionService, provenance,
                 artifactStore, docRepo, parentRepo, childRepo, milvus, embeddingModel,
-                taggingService, embeddingCache, embeddingModelName, null, false, null);
+                taggingService, embeddingCache, embeddingModelName, null, false, null, null);
     }
 
-    /** 全量装配构造：末尾追加可选 {@link GraphExtractionService}（GraphRAG）。 */
+    /** 全量装配构造：末尾追加可选 {@link GraphExtractionService}（GraphRAG）与 L1 近重复守卫。 */
     @Autowired
     public IngestionService(WikiAgentProperties props, DocumentParser parser, TextCleaner cleaner,
                             RichDocumentParser richParser, PageStructureService structureService,
@@ -131,7 +134,8 @@ public class IngestionService {
                             String embeddingModelName,
                             ObjectProvider<com.wikiagent.application.graph.GraphExtractionService> graphExtractionService,
                             @Value("${wikiagent.dedup.enabled:false}") boolean dedupEnabled,
-                            ObjectProvider<MetricEventJpaDao> metricEventDao) {
+                            ObjectProvider<MetricEventJpaDao> metricEventDao,
+                            ObjectProvider<NearDuplicateGuard> nearDuplicateGuard) {
         this.props = props;
         this.parser = parser;
         this.cleaner = cleaner;
@@ -151,6 +155,7 @@ public class IngestionService {
         this.graphExtractionService = graphExtractionService == null ? null : graphExtractionService.getIfAvailable();
         this.dedupEnabled = dedupEnabled;
         this.metricEventDao = metricEventDao == null ? null : metricEventDao.getIfAvailable();
+        this.nearDuplicateGuard = nearDuplicateGuard == null ? null : nearDuplicateGuard.getIfAvailable();
     }
 
     /** 单测用装配：显式指定 dedup 开关与 metric DAO。 */
@@ -181,6 +186,7 @@ public class IngestionService {
         this.graphExtractionService = null;
         this.dedupEnabled = dedupEnabled;
         this.metricEventDao = metricEventDao;
+        this.nearDuplicateGuard = null;
     }
 
     /** 入库结果摘要。 */
@@ -544,11 +550,23 @@ public class IngestionService {
     /**
      * 步骤 5 向量化 + 写索引（DashScope 单次批量上限 10）。
      * 幂等：doc 已 READY（重复调度）返回 false 跳过，不重复写 Milvus。
+     * <p>
+     * L1 近重复守卫在 embedding 之前执行（命中即省输家 chunk 的 embedding 费用）；
+     * is_active 交换与本方法其余 chunk 状态修改处于同一事务（与 splitStep 的 @Transactional 语义一致）。
      */
+    @Transactional
     public boolean embedAndPersistStep(String docId) {
         KbDocument doc = requireDoc(docId);
         if (KbDocument.READY.equals(doc.getStatus())) {
             return false;
+        }
+        // L1 近重复守卫：检测/Redis 异常降级跳过并告警，不阻断入库主流程
+        if (nearDuplicateGuard != null) {
+            try {
+                nearDuplicateGuard.inspect(docId);
+            } catch (Exception e) {
+                log.warn("L1 近重复检测失败（降级跳过，不阻断入库）docId={}: {}", docId, e.getMessage());
+            }
         }
         doc.setStatus(KbDocument.EMBEDDING);
         docRepo.save(doc);
