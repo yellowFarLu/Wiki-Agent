@@ -67,12 +67,22 @@ public class ObservabilityController {
         long citations = events.stream().filter(e -> "CITED".equals(e.getEventType())).count();
         long useful = feedbackDao.findAll().stream().filter(f -> "USEFUL".equals(f.getFeedbackType())).count();
         long useless = feedbackDao.findAll().stream().filter(f -> "USELESS".equals(f.getFeedbackType())).count();
+        // Task 7：检索侧冲突守卫指标（近 7 天，按 eventType 计数）
+        long conflictDetected = events.stream()
+                .filter(e -> "CONFLICT_GUARD_DETECTED".equals(e.getEventType())).count();
+        long conflictRemoved = events.stream()
+                .filter(e -> "CONFLICT_GUARD_REMOVED".equals(e.getEventType())).count();
+        long conflictKeptBoth = events.stream()
+                .filter(e -> "CONFLICT_GUARD_KEPT_BOTH".equals(e.getEventType())).count();
         dashboard.put("businessMetrics", Map.of(
                 "period", "7d",
                 "retrievals", retrievals,
                 "citations", citations,
                 "useful", useful,
-                "useless", useless
+                "useless", useless,
+                "conflictGuardDetected", conflictDetected,
+                "conflictGuardRemoved", conflictRemoved,
+                "conflictGuardKeptBoth", conflictKeptBoth
         ));
 
         // Tab 3: 知识明细

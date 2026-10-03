@@ -30,6 +30,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -132,6 +133,9 @@ public class RetrievalService {
     /** GraphRAG 服务（可选，wikiagent.graph.enabled=true 时注入）。 */
     private final com.wikiagent.application.graph.GraphRagService graphRagService;
 
+    /** Task 7 检索侧冲突守卫（可选；内部按 wikiagent.conflict.guard.enabled + 灰度门控）。 */
+    private final RetrievalConflictGuard conflictGuard;
+
     /** Milvus 不可用截止时间戳；0 表示正常，>now 表示冷却降级中。 */
     private volatile long milvusDisabledUntil = 0L;
 
@@ -170,11 +174,29 @@ public class RetrievalService {
     }
 
     /**
-     * E2/E3/E5 全量装配构造。
+     * E2/E3/E5 13 参构造（兼容）：无 ConflictGuard。
+     */
+    public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KbParentChunkRepo parentRepo, KbDocumentRepo docRepo, KbChildChunkRepo childRepo,
+                            MetricEventJpaDao metricEventDao,
+                            org.springframework.beans.factory.ObjectProvider<RerankProvider> rerankProvider,
+                            org.springframework.beans.factory.ObjectProvider<KnowledgeMetadataJpaDao> metadataDao,
+                            boolean milvusFilterMetadata,
+                            org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder,
+                            org.springframework.beans.factory.ObjectProvider<GrayReleaseService> grayRelease,
+                            org.springframework.beans.factory.ObjectProvider<com.wikiagent.application.graph.GraphRagService> graphRagService) {
+        this(props, milvus, embeddingModel, parentRepo, docRepo, childRepo, metricEventDao,
+                rerankProvider, metadataDao, milvusFilterMetadata, callRecorder, grayRelease,
+                graphRagService, null);
+    }
+
+    /**
+     * E2/E3/E5/Task7 全量装配构造。
      *
      * @param callRecorder RERANK 打点器（ObjectProvider 可选；无 Bean 时不打点）
      * @param grayRelease  灰度决策（ObjectProvider 可选；无 Bean 时不门控）
      * @param graphRagService GraphRAG 图检索（ObjectProvider 可选；wikiagent.graph.enabled=true 时存在）
+     * @param conflictGuard 检索侧冲突守卫（ObjectProvider 可选；与 rerankProvider 同款可选注入模式）
      */
     @org.springframework.beans.factory.annotation.Autowired
     public RetrievalService(WikiAgentProperties props, MilvusStoreService milvus, EmbeddingModel embeddingModel,
@@ -186,7 +208,8 @@ public class RetrievalService {
                                     "${wikiagent.milvus.filter-metadata:false}") boolean milvusFilterMetadata,
                             org.springframework.beans.factory.ObjectProvider<ModelCallRecorder> callRecorder,
                             org.springframework.beans.factory.ObjectProvider<GrayReleaseService> grayRelease,
-                            org.springframework.beans.factory.ObjectProvider<com.wikiagent.application.graph.GraphRagService> graphRagService) {
+                            org.springframework.beans.factory.ObjectProvider<com.wikiagent.application.graph.GraphRagService> graphRagService,
+                            org.springframework.beans.factory.ObjectProvider<RetrievalConflictGuard> conflictGuard) {
         this.props = props;
         this.milvus = milvus;
         this.embeddingModel = embeddingModel;
@@ -201,6 +224,7 @@ public class RetrievalService {
         this.callRecorder = callRecorder == null ? null : callRecorder.getIfAvailable();
         this.grayRelease = grayRelease == null ? null : grayRelease.getIfAvailable();
         this.graphRagService = graphRagService == null ? null : graphRagService.getIfAvailable();
+        this.conflictGuard = conflictGuard == null ? null : conflictGuard.getIfAvailable();
     }
 
     /** 单次多查询检索（一次组装，rerank 可用时重排）。 */
@@ -651,6 +675,11 @@ public class RetrievalService {
                 repChildren.put(c.getId(), c);
             }
         }
+
+        // Task 7 ConflictGuard：rerank 之后、字符预算组装之前，对代表子块做冲突裁决。
+        // 移除粒度=chunk（输家 chunk 从该父块的代表子块候选中剔除；当前每父块仅一个代表子块，
+        // 剔除后父块无存活代表子块 → 整体剔除）；conflictNote 以独立段落拼进 ctx 末尾。
+        String conflictNote = maybeConflictGuard(acc, rerankQuery, repChildren);
         // §2.5：artifactId 由 knowledge_metadata.artifact_id（V11）回填；未打标公共知识为 null
         Map<String, String> artifactIds = new HashMap<>();
         if (metadataDao != null && !repChildren.isEmpty()) {
@@ -693,7 +722,63 @@ public class RetrievalService {
                     acc.bestScore.getOrDefault(parentId, 0.0), filename));
             idx++;
         }
+        // Task 7：冲突标注段（仅"保留但存在冲突"时非空）以独立段落拼进 ctx 末尾
+        if (conflictNote != null && !conflictNote.isBlank()) {
+            ctx.append(conflictNote);
+        }
         return new RetrievalResult(sources, ctx.toString());
+    }
+
+    /**
+     * Task 7 ConflictGuard：对最终候选的代表子块做冲突裁决（守卫缺席/候选不足/查询为空时跳过）。
+     * <p>
+     * 输家 chunk 从其父块的代表子块候选中剔除；当前累积器每父块仅维护一个代表子块，
+     * 剔除后父块无存活代表子块 → 父块整体从 parentOrder 剔除（不进入本次上下文与引用）。
+     * 守卫内部 fail-open（开关/灰度/异常均原样透传），此处不做二次兜底。
+     *
+     * @return conflictNote（nullable，拼进 ctx 末尾的冲突标注段）
+     */
+    private String maybeConflictGuard(Accumulator acc, String query, Map<String, KbChildChunk> repChildren) {
+        if (conflictGuard == null || query == null || query.isBlank() || acc.parentOrder.size() < 2) {
+            return null;
+        }
+        // 代表子块候选（保持 parentOrder 命中顺序）
+        List<String> candParentIds = new ArrayList<>();
+        List<ConflictCandidateDetector.RepChunkView> candidates = new ArrayList<>();
+        for (String parentId : acc.parentOrder) {
+            Accumulator.RepChild rc = acc.repChild.get(parentId);
+            if (rc == null) {
+                continue; // 无代表子块（测试辅助命中），不参与冲突裁决
+            }
+            KbChildChunk child = repChildren.get(rc.childId());
+            if (child == null) {
+                continue;
+            }
+            candParentIds.add(parentId);
+            candidates.add(new ConflictCandidateDetector.RepChunkView(
+                    child.getId(), child.getDocId(), child.getContent(), rc.score()));
+        }
+        if (candidates.size() < 2) {
+            return null;
+        }
+        RetrievalConflictGuard.GuardResult result = conflictGuard.apply(query, candidates);
+        if (result == null) {
+            return null;
+        }
+        Set<String> keptIds = new HashSet<>();
+        for (ConflictCandidateDetector.RepChunkView c : result.kept()) {
+            keptIds.add(c.childId());
+        }
+        for (int i = 0; i < candidates.size(); i++) {
+            if (!keptIds.contains(candidates.get(i).childId())) {
+                String parentId = candParentIds.get(i);
+                acc.repChild.remove(parentId);
+                acc.parentOrder.remove(parentId);
+                acc.bestScore.remove(parentId);
+                acc.parentDoc.remove(parentId);
+            }
+        }
+        return result.conflictNote();
     }
 
     /** §2.5：引用片段 = 子块原文去空白后前 200 字符；子块缺失/空时为 null。 */
