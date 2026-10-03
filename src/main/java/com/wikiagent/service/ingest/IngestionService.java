@@ -18,6 +18,8 @@ import com.wikiagent.domain.lineage.EdgeType;
 import com.wikiagent.domain.parse.model.ParsedDocument;
 import com.wikiagent.domain.parse.model.ParsedPage;
 import com.wikiagent.infrastructure.lineage.ArtifactStore;
+import com.wikiagent.infrastructure.persistence.MetricEventEntity;
+import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
 import com.wikiagent.entity.KbChildChunk;
 import com.wikiagent.entity.KbDocument;
 import com.wikiagent.entity.KbParentChunk;
@@ -80,6 +82,10 @@ public class IngestionService {
     private final EmbeddingCacheService embeddingCache;
     /** 缓存 key 中的模型名，与 DashScope embedding 配置一致。 */
     private final String embeddingModelName;
+    /** L0 精确去重开关（wikiagent.dedup.enabled，默认 false）。 */
+    private final boolean dedupEnabled;
+    /** L0 精确去重打点 DAO（metric_event.chunkId 用真实新 chunk id）。 */
+    private final MetricEventJpaDao metricEventDao;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 兼容旧装配（既有测试直接 new）：不接 embedding 缓存，裸调 embeddingModel。 */
@@ -92,7 +98,7 @@ public class IngestionService {
                             KnowledgeTaggingService taggingService) {
         this(props, parser, cleaner, richParser, structureService, extractionService, provenance,
                 artifactStore, docRepo, parentRepo, childRepo, milvus, embeddingModel,
-                taggingService, null, "text-embedding-v4", null);
+                taggingService, null, "text-embedding-v4", null, false, null);
     }
 
     /** 兼容旧装配（含 embedding 缓存）：无 GraphRAG。 */
@@ -108,7 +114,7 @@ public class IngestionService {
                             String embeddingModelName) {
         this(props, parser, cleaner, richParser, structureService, extractionService, provenance,
                 artifactStore, docRepo, parentRepo, childRepo, milvus, embeddingModel,
-                taggingService, embeddingCache, embeddingModelName, null);
+                taggingService, embeddingCache, embeddingModelName, null, false, null);
     }
 
     /** 全量装配构造：末尾追加可选 {@link GraphExtractionService}（GraphRAG）。 */
@@ -123,7 +129,9 @@ public class IngestionService {
                             ObjectProvider<EmbeddingCacheService> embeddingCache,
                             @Value("${spring.ai.dashscope.embedding.options.model:text-embedding-v4}")
                             String embeddingModelName,
-                            ObjectProvider<com.wikiagent.application.graph.GraphExtractionService> graphExtractionService) {
+                            ObjectProvider<com.wikiagent.application.graph.GraphExtractionService> graphExtractionService,
+                            @Value("${wikiagent.dedup.enabled:false}") boolean dedupEnabled,
+                            ObjectProvider<MetricEventJpaDao> metricEventDao) {
         this.props = props;
         this.parser = parser;
         this.cleaner = cleaner;
@@ -141,6 +149,38 @@ public class IngestionService {
         this.embeddingCache = embeddingCache == null ? null : embeddingCache.getIfAvailable();
         this.embeddingModelName = embeddingModelName;
         this.graphExtractionService = graphExtractionService == null ? null : graphExtractionService.getIfAvailable();
+        this.dedupEnabled = dedupEnabled;
+        this.metricEventDao = metricEventDao == null ? null : metricEventDao.getIfAvailable();
+    }
+
+    /** 单测用装配：显式指定 dedup 开关与 metric DAO。 */
+    public IngestionService(WikiAgentProperties props, DocumentParser parser, TextCleaner cleaner,
+                            RichDocumentParser richParser, PageStructureService structureService,
+                            FieldExtractionService extractionService,
+                            ProvenanceService provenance, ArtifactStore artifactStore,
+                            KbDocumentRepo docRepo, KbParentChunkRepo parentRepo, KbChildChunkRepo childRepo,
+                            MilvusStoreService milvus, EmbeddingModel embeddingModel,
+                            KnowledgeTaggingService taggingService,
+                            boolean dedupEnabled, MetricEventJpaDao metricEventDao) {
+        this.props = props;
+        this.parser = parser;
+        this.cleaner = cleaner;
+        this.richParser = richParser;
+        this.structureService = structureService;
+        this.extractionService = extractionService;
+        this.provenance = provenance;
+        this.artifactStore = artifactStore;
+        this.docRepo = docRepo;
+        this.parentRepo = parentRepo;
+        this.childRepo = childRepo;
+        this.milvus = milvus;
+        this.embeddingModel = embeddingModel;
+        this.taggingService = taggingService;
+        this.embeddingCache = null;
+        this.embeddingModelName = "text-embedding-v4";
+        this.graphExtractionService = null;
+        this.dedupEnabled = dedupEnabled;
+        this.metricEventDao = metricEventDao;
     }
 
     /** 入库结果摘要。 */
@@ -399,8 +439,11 @@ public class IngestionService {
             for (int c = 0; c < children.size(); c++) {
                 String text = children.get(c);
                 Integer pageNo = mapToPageNo(text, pages);
-                childEntities.add(newChild(UUID.randomUUID().toString(), docId, parentId, c,
-                        text, pageNo, ver));
+                KbChildChunk child = newChild(UUID.randomUUID().toString(), docId, parentId, c,
+                        text, pageNo, ver);
+                // L0 精确去重：规范化 hash 落库（开关关闭也写 hash，便于后续追溯）
+                child.setContentHash(ContentHasher.sha256Normalized(text));
+                childEntities.add(child);
             }
         }
         parentRepo.saveAll(parentEntities);
@@ -409,12 +452,58 @@ public class IngestionService {
         doc.setChildCount(childEntities.size());
         docRepo.save(doc);
 
+        // L0 精确去重：本批 chunk 命中已有 active chunk 时按生效日期裁决谁留 active
+        if (dedupEnabled && metricEventDao != null) {
+            applyExactDedup(doc, childEntities);
+        }
+
         try {
             taggingService.tagDocument(docId, childEntities, tagContext);
         } catch (Exception tagEx) {
             log.warn("知识元数据打标失败 docId={}: {}", docId, tagEx.getMessage());
         }
         return new IngestOutcome(parentEntities.size(), childEntities.size());
+    }
+
+    /**
+     * L0 精确去重裁决（splitStep 同事务内）：
+     * 对本批 chunk 逐条按 content_hash 查已有 active chunk（排除本 docId）；
+     * 命中时——生效日晚者留 active，早者置 false；相同/缺失则留旧（已存在者）。
+     * 命中即写 DEDUP_EXACT_SKIPPED metric_event，chunkId 用真实新 chunk id。
+     * 软删 only：MySQL 是真相源，无 Milvus chunk 级删除。
+     */
+    private void applyExactDedup(KbDocument newDoc, List<KbChildChunk> newChunks) {
+        for (KbChildChunk fresh : newChunks) {
+            String hash = fresh.getContentHash();
+            if (hash == null || hash.isEmpty()) {
+                continue;
+            }
+            KbChildChunk existing = childRepo.findFirstByContentHashAndActiveTrue(hash).orElse(null);
+            if (existing == null || existing.getDocId().equals(newDoc.getId())) {
+                continue;
+            }
+            KbDocument existingDoc = docRepo.findById(existing.getDocId()).orElse(null);
+            java.time.LocalDate newDate = newDoc.getEffectiveDate();
+            java.time.LocalDate oldDate = existingDoc == null ? null : existingDoc.getEffectiveDate();
+            // 规则：晚者胜；任一缺失或相同 → 留旧（existing 保持 active，新块置 false）
+            boolean newWins = newDate != null && oldDate != null && newDate.isAfter(oldDate);
+            if (newWins) {
+                existing.setActive(false);
+                childRepo.save(existing);
+                // fresh 保持 active=true（默认）；落 metric
+                log.info("L0 精确去重：新块生效日晚于旧块，旧块下线 existingChunk={} newChunk={} hash={}",
+                        existing.getId(), fresh.getId(), hash);
+            } else {
+                fresh.setActive(false);
+                childRepo.save(fresh);
+                log.info("L0 精确去重：新块生效日不晚于旧块，新块下线 existingChunk={} newChunk={} hash={}",
+                        existing.getId(), fresh.getId(), hash);
+            }
+            MetricEventEntity metric = new MetricEventEntity();
+            metric.setChunkId(fresh.getId());
+            metric.setEventType("DEDUP_EXACT_SKIPPED");
+            metricEventDao.save(metric);
+        }
     }
 
     /** 读富解析分页（旧解析路径无 _parsed.json → 空列表，页码留 null）。 */

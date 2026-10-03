@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface KbChildChunkRepo extends JpaRepository<KbChildChunk, String> {
 
@@ -28,4 +29,7 @@ public interface KbChildChunkRepo extends JpaRepository<KbChildChunk, String> {
     List<KbChildChunk> findByContentContainingIgnoreCaseAndActiveTrue(String keyword, Pageable pageable);
 
     void deleteByDocId(String docId);
+
+    /** L0 精确去重：按规范化内容哈希查首个 active chunk（命中即视为完全重复）。 */
+    Optional<KbChildChunk> findFirstByContentHashAndActiveTrue(String contentHash);
 }
