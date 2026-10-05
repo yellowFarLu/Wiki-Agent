@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS extracted_field (
     source          VARCHAR(16)  NOT NULL,       -- MODEL / RULE / HUMAN
     schema_key      VARCHAR(128),
     schema_version  VARCHAR(32),
-    valid           TINYINT      NOT NULL DEFAULT 1,
-    review_required TINYINT      NOT NULL DEFAULT 0,
+    valid           TINYINT(1)   NOT NULL DEFAULT 1,
+    review_required TINYINT(1)   NOT NULL DEFAULT 0,
     version_no      INT          NOT NULL DEFAULT 1,
     created_at      TIMESTAMP    NOT NULL,
     updated_at      TIMESTAMP    NOT NULL,

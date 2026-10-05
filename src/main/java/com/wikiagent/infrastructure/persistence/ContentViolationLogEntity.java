@@ -26,13 +26,13 @@ public class ContentViolationLogEntity {
     @Column(name = "violation_type", nullable = false)
     private String violationType;  // PROMPT_INJECTION / JAILBREAK / PII_LEAK / TOXIC_CONTENT / SYSTEM_PROMPT_LEAK / PROTECTED_MATERIAL
 
-    @Column(name = "violation_detail", length = 4000)
+    @Column(name = "violation_detail", columnDefinition = "TEXT")
     private String violationDetail;
 
-    @Column(name = "original_content", length = 4000)
+    @Column(name = "original_content", columnDefinition = "TEXT")
     private String originalContent;
 
-    @Column(name = "blocked_content", length = 4000)
+    @Column(name = "blocked_content", columnDefinition = "TEXT")
     private String blockedContent;
 
     @Column(name = "severity", nullable = false)

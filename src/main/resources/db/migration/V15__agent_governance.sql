@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS tool_permission (
     tool_name         VARCHAR(64)  NOT NULL,
     required_role     VARCHAR(64),                 -- 空 = 不校验角色
     required_scope    VARCHAR(64),                 -- 空 = 不校验 scope
-    requires_approval TINYINT      NOT NULL DEFAULT 0,  -- 1 = 高危工具，执行前需 TOOL_APPROVAL
+    requires_approval TINYINT(1)  NOT NULL DEFAULT 0,  -- 1 = 高危工具，执行前需 TOOL_APPROVAL
     updated_at        TIMESTAMP    NOT NULL,
     CONSTRAINT uk_tool_permission_name UNIQUE (tool_name)
 );

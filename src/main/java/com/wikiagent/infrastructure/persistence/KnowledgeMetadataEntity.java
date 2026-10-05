@@ -52,7 +52,7 @@ public class KnowledgeMetadataEntity {
     private Integer pageNo;
 
     /** C2/修复4：原文片段（子块内容截断）。 */
-    @Column(name = "snippet", length = 500)
+    @Column(name = "snippet", columnDefinition = "TEXT")
     private String snippet;
 
     /** C2/修复4：关联产物 ID（doc_artifact.id，可空）。 */

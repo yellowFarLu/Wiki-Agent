@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS task_instance (
     biz_key         VARCHAR(128) NOT NULL,              -- 幂等业务键
     payload         TEXT         NOT NULL,              -- 提交参数 JSON
     status          VARCHAR(16)  NOT NULL,              -- PENDING/DISPATCH/RUNNING/...
-    priority        TINYINT      NOT NULL DEFAULT 5,
+    priority        INT          NOT NULL DEFAULT 5,
     attempt         INT          NOT NULL DEFAULT 0,
     max_attempts    INT          NOT NULL DEFAULT 3,
     progress_percent INT         NOT NULL DEFAULT 0,

@@ -5,6 +5,6 @@ ALTER TABLE kb_child_chunk ADD COLUMN page_no INT;
 
 ALTER TABLE knowledge_metadata ADD COLUMN page_no INT;
 ALTER TABLE knowledge_metadata ADD COLUMN snippet TEXT;
-ALTER TABLE knowledge_metadata ADD COLUMN artifact_id VARCHAR(64);
+ALTER TABLE knowledge_metadata ADD COLUMN artifact_id BIGINT;
 
 CREATE INDEX idx_kb_child_doc_page ON kb_child_chunk (doc_id, page_no);

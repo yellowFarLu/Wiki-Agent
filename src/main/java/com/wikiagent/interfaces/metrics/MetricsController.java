@@ -2,14 +2,20 @@ package com.wikiagent.interfaces.metrics;
 
 import com.wikiagent.application.knowledge.MetricsAggregationJob;
 import com.wikiagent.application.knowledge.MetricsAggregationJob.MetricsSnapshot;
+import com.wikiagent.application.knowledge.RagAnswerJudgeService;
 import com.wikiagent.infrastructure.persistence.KbFeedbackEntity;
 import com.wikiagent.infrastructure.persistence.KbFeedbackJpaDao;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataEntity;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
 import com.wikiagent.infrastructure.persistence.MetricEventEntity;
 import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
+import com.wikiagent.infrastructure.persistence.RagAnswerEvalEntity;
+import com.wikiagent.infrastructure.persistence.RagAnswerEvalJpaDao;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,9 +26,12 @@ import java.util.*;
 /**
  * v4 §6.6.2.4 知识指标看板 API。
  * <p>
- * GET /api/metrics/dashboard    — 知识看板概览（召回率、精确率、有用率、无用率、使用频率、过期知识）
+ * GET /api/metrics/aggregation    — 定时聚合快照（含 RAG 回答评测三率 answerEval）
+ * GET /api/metrics/dashboard      — 知识看板概览（召回率、精确率、有用率、无用率、使用频率、过期知识）
  * GET /api/metrics/knowledge      — 知识元数据列表（含创建时间、创建者、创建身份）
  * GET /api/metrics/chunk/{chunkId} — 单条知识 chunk 的指标明细
+ * GET /api/metrics/answer-eval/samples — 最近 RAG 评测样本明细
+ * POST /api/metrics/answer-eval/judge  — 手动触发一批 LLM 评判
  */
 @RestController
 @RequestMapping("/api/metrics")
@@ -33,16 +42,22 @@ public class MetricsController {
     private final KnowledgeMetadataJpaDao metadataDao;
     private final MetricEventJpaDao metricEventDao;
     private final KbFeedbackJpaDao feedbackDao;
+    private final RagAnswerEvalJpaDao answerEvalDao;
     private final MetricsAggregationJob aggregationJob;
+    private final ObjectProvider<RagAnswerJudgeService> judgeServiceProvider;
 
     public MetricsController(KnowledgeMetadataJpaDao metadataDao,
                              MetricEventJpaDao metricEventDao,
                              KbFeedbackJpaDao feedbackDao,
-                             MetricsAggregationJob aggregationJob) {
+                             RagAnswerEvalJpaDao answerEvalDao,
+                             MetricsAggregationJob aggregationJob,
+                             ObjectProvider<RagAnswerJudgeService> judgeServiceProvider) {
         this.metadataDao = metadataDao;
         this.metricEventDao = metricEventDao;
         this.feedbackDao = feedbackDao;
+        this.answerEvalDao = answerEvalDao;
         this.aggregationJob = aggregationJob;
+        this.judgeServiceProvider = judgeServiceProvider;
     }
 
     /**
@@ -169,5 +184,64 @@ public class MetricsController {
         metrics.put("lastUsedAt", events.isEmpty() ? null : events.get(events.size() - 1).getCreatedAt());
 
         return ResponseEntity.ok(metrics);
+    }
+
+    /**
+     * 最近 RAG 回答评测样本明细（方案 docs/rag-accuracy-eval.md）。
+     * question/answer 截 200 字展示；faithfulness/relevance 为 null 表示无法评判。
+     */
+    @GetMapping("/answer-eval/samples")
+    public ResponseEntity<List<Map<String, Object>>> answerEvalSamples(
+            @RequestParam(defaultValue = "20") int limit) {
+        int size = Math.max(1, Math.min(limit, 100));
+        List<RagAnswerEvalEntity> rows = answerEvalDao.findAll(
+                PageRequest.of(0, size, Sort.by(Sort.Direction.DESC, "createdAt"))).getContent();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (RagAnswerEvalEntity e : rows) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", e.getId());
+            item.put("sessionId", e.getSessionId());
+            item.put("question", truncate(e.getQuestion(), 200));
+            item.put("answer", truncate(e.getAnswer(), 200));
+            item.put("channel", e.getChannel());
+            item.put("judgeModel", e.getJudgeModel());
+            item.put("faithfulness", e.getFaithfulness());
+            item.put("relevance", e.getRelevance());
+            item.put("verdictReason", e.getVerdictReason());
+            item.put("status", e.getStatus());
+            item.put("error", e.getError());
+            item.put("createdAt", e.getCreatedAt());
+            item.put("judgedAt", e.getJudgedAt());
+            result.add(item);
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * 手动触发一批 LLM 评判（评测服务未启用时返回 409 + 说明，不假装成功）。
+     */
+    @PostMapping("/answer-eval/judge")
+    public ResponseEntity<Map<String, Object>> judgeAnswerEval() {
+        RagAnswerJudgeService judgeService = judgeServiceProvider.getIfAvailable();
+        if (judgeService == null) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("enabled", false);
+            body.put("message", "RAG 回答评测未启用（wikiagent.answer-eval.enabled=false），看板无评测数据");
+            return ResponseEntity.status(409).body(body);
+        }
+        RagAnswerJudgeService.JudgeBatchResult r = judgeService.judgePendingBatch();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("enabled", true);
+        body.put("judged", r.judged());
+        body.put("failed", r.failed());
+        return ResponseEntity.ok(body);
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) {
+            return null;
+        }
+        String oneLine = s.replace('\n', ' ').replace('\r', ' ').strip();
+        return oneLine.length() <= max ? oneLine : oneLine.substring(0, max);
     }
 }

@@ -19,6 +19,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { listReviewCases, resolveReviewCase } from '@/lib/api';
+import { formatDateTime } from '@/lib/datetime';
 import type { ReviewCase } from '@/lib/types';
 
 const CASE_TYPE_LABEL: Record<string, string> = {
@@ -151,7 +152,7 @@ export default function ReviewCasesTab() {
       render: (v: number | null) => (v === null ? '-' : v.toFixed(2)),
     },
     { title: '状态', dataIndex: 'status', key: 'status', width: 90, render: (v: string) => <Tag>{v}</Tag> },
-    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 190 },
+    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 180, render: (v: string | null) => formatDateTime(v) },
   ];
 
   return (

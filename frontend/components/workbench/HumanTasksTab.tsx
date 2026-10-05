@@ -22,6 +22,7 @@ import {
   listTasks,
   resolveHumanTask,
 } from '@/lib/api';
+import { formatDateTime } from '@/lib/datetime';
 import type { HumanTaskView, TaskView } from '@/lib/types';
 import TaskStatusTag from '@/components/common/TaskStatusTag';
 
@@ -165,7 +166,7 @@ export default function HumanTasksTab({ onGoReview }: { onGoReview: () => void }
       render: (v: string) => <TaskStatusTag status={v} />,
     },
     { title: '业务键', dataIndex: 'bizKey', key: 'bizKey' },
-    { title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 200 },
+    { title: '更新时间', dataIndex: 'updatedAt', key: 'updatedAt', width: 180, render: (v: string | null) => formatDateTime(v) },
   ];
 
   const humanColumns: ColumnsType<HumanTaskView> = [

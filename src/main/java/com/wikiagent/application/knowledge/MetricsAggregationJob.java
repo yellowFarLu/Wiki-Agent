@@ -5,6 +5,8 @@ import com.wikiagent.infrastructure.persistence.KnowledgeMetadataEntity;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
 import com.wikiagent.infrastructure.persistence.MetricEventEntity;
 import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
+import com.wikiagent.infrastructure.persistence.RagAnswerEvalEntity;
+import com.wikiagent.infrastructure.persistence.RagAnswerEvalJpaDao;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +50,7 @@ public class MetricsAggregationJob {
     private final KnowledgeMetadataJpaDao metadataDao;
     private final MetricEventJpaDao metricEventDao;
     private final KbFeedbackJpaDao feedbackDao;
+    private final RagAnswerEvalJpaDao answerEvalDao;
     private final ObjectProvider<MeterRegistry> meterRegistryProvider;
     private final long tauTimeDays;
     private final double staleThreshold;
@@ -57,12 +60,14 @@ public class MetricsAggregationJob {
     public MetricsAggregationJob(KnowledgeMetadataJpaDao metadataDao,
                                  MetricEventJpaDao metricEventDao,
                                  KbFeedbackJpaDao feedbackDao,
+                                 RagAnswerEvalJpaDao answerEvalDao,
                                  ObjectProvider<MeterRegistry> meterRegistryProvider,
                                  @Value("${wikiagent.metrics.tau-time-days:180}") long tauTimeDays,
                                  @Value("${wikiagent.metrics.stale-threshold:0.3}") double staleThreshold) {
         this.metadataDao = metadataDao;
         this.metricEventDao = metricEventDao;
         this.feedbackDao = feedbackDao;
+        this.answerEvalDao = answerEvalDao;
         this.meterRegistryProvider = meterRegistryProvider;
         this.tauTimeDays = tauTimeDays;
         this.staleThreshold = staleThreshold;
@@ -122,7 +127,7 @@ public class MetricsAggregationJob {
                 Math.round(usefulnessRate * 1000.0) / 1000.0,
                 Math.round(recallRate * 1000.0) / 1000.0,
                 Math.round(precisionRate * 1000.0) / 1000.0,
-                staleKnowledge);
+                staleKnowledge, answerEvalSummary());
         latest.set(snapshot);
         publishGauges(snapshot);
         return snapshot;
@@ -131,6 +136,28 @@ public class MetricsAggregationJob {
     /** 最近一次聚合快照（未聚合过返回 null）。 */
     public MetricsSnapshot latest() {
         return latest.get();
+    }
+
+    /**
+     * RAG 回答评测三率聚合（方案 docs/rag-accuracy-eval.md）。
+     * 诚实口径：每个率独立分母（维度非 null 的行数），分母为 0 → null → 看板显示"暂无数据"。
+     */
+    private AnswerEvalSummary answerEvalSummary() {
+        long judged = answerEvalDao.countByStatus(RagAnswerEvalEntity.STATUS_JUDGED);
+        long pending = answerEvalDao.countByStatus(RagAnswerEvalEntity.STATUS_PENDING);
+        long failed = answerEvalDao.countByStatus(RagAnswerEvalEntity.STATUS_FAILED);
+        long fJudged = answerEvalDao.countByFaithfulnessIsNotNull();
+        long rJudged = answerEvalDao.countByRelevanceIsNotNull();
+        long aJudged = answerEvalDao.countByFaithfulnessIsNotNullAndRelevanceIsNotNull();
+        Double fRate = fJudged > 0 ? round3((double) answerEvalDao.countByFaithfulness(1) / fJudged) : null;
+        Double rRate = rJudged > 0 ? round3((double) answerEvalDao.countByRelevance(1) / rJudged) : null;
+        Double aRate = aJudged > 0
+                ? round3((double) answerEvalDao.countByFaithfulnessAndRelevance(1, 1) / aJudged) : null;
+        return new AnswerEvalSummary(judged, pending, failed, aRate, fRate, rRate, aJudged, fJudged, rJudged);
+    }
+
+    private static double round3(double v) {
+        return Math.round(v * 1000.0) / 1000.0;
     }
 
     private void publishGauges(MetricsSnapshot s) {
@@ -143,6 +170,18 @@ public class MetricsAggregationJob {
         registry.gauge("wikiagent.feedback.usefulness.rate", s.usefulnessRate());
         registry.gauge("wikiagent.retrieval.recall.rate", s.recallRate());
         registry.gauge("wikiagent.retrieval.precision.rate", s.precisionRate());
+        AnswerEvalSummary eval = s.answerEval();
+        if (eval != null) {
+            if (eval.accuracyRate() != null) {
+                registry.gauge("wikiagent.rag.eval.accuracy.rate", eval.accuracyRate());
+            }
+            if (eval.faithfulnessRate() != null) {
+                registry.gauge("wikiagent.rag.eval.faithfulness.rate", eval.faithfulnessRate());
+            }
+            if (eval.relevanceRate() != null) {
+                registry.gauge("wikiagent.rag.eval.relevance.rate", eval.relevanceRate());
+            }
+        }
     }
 
     /** 聚合快照。 */
@@ -156,7 +195,8 @@ public class MetricsAggregationJob {
             double usefulnessRate,
             double recallRate,
             double precisionRate,
-            List<StaleKnowledge> staleKnowledge) {
+            List<StaleKnowledge> staleKnowledge,
+            AnswerEvalSummary answerEval) {
 
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -172,8 +212,28 @@ public class MetricsAggregationJob {
             m.put("precisionRate", precisionRate);
             m.put("staleKnowledgeCount", staleKnowledge.size());
             m.put("staleKnowledge", staleKnowledge);
+            m.put("answerEval", answerEval);
             return m;
         }
+    }
+
+    /**
+     * RAG 回答评测汇总（三率独立分母，无数据为 null 不捏造）。
+     *
+     * @param accuracyRate    Σ(f=1∧r=1)/Σ(两维均≠null)
+     * @param faithfulnessRate Σ(f=1)/Σ(f≠null)
+     * @param relevanceRate    Σ(r=1)/Σ(r≠null)
+     */
+    public record AnswerEvalSummary(
+            long judgedCount,
+            long pendingCount,
+            long failedCount,
+            Double accuracyRate,
+            Double faithfulnessRate,
+            Double relevanceRate,
+            long accuracyJudged,
+            long faithfulnessJudged,
+            long relevanceJudged) {
     }
 
     /** 疑似过期知识条目。 */

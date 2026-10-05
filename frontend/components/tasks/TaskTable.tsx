@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import type { ColumnsType } from 'antd/es/table';
 import { listTasks } from '@/lib/api';
 import type { TaskView } from '@/lib/types';
+import { formatDateTime } from '@/lib/datetime';
 import TaskStatusTag from '@/components/common/TaskStatusTag';
 
 const STATUS_OPTIONS = [
@@ -79,7 +80,13 @@ export default function TaskTable() {
       render: (_, r) => `${r.attempt}/${r.maxAttempts}`,
     },
     { title: '提交人', dataIndex: 'submittedBy', key: 'submittedBy', width: 140 },
-    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 200 },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 180,
+      render: (v: string) => formatDateTime(v),
+    },
   ];
 
   return (
@@ -105,7 +112,7 @@ export default function TaskTable() {
         <Alert
           type="error"
           showIcon
-          title="任务列表加载失败"
+          message="任务列表加载失败"
           description={error}
           style={{ marginBottom: 16 }}
           action={

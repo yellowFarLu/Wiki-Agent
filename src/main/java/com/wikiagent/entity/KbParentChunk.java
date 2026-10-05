@@ -19,7 +19,7 @@ public class KbParentChunk {
     @Column(name = "parent_index", nullable = false)
     private int parentIndex;
 
-    @Column(nullable = false, length = 20000)
+    @Column(nullable = false, columnDefinition = "MEDIUMTEXT")
     private String content;
 
     public String getId() { return id; }

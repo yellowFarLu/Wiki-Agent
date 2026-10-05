@@ -25,6 +25,7 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -38,6 +39,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -307,6 +309,81 @@ class RetrievalConflictGuardTest {
         assertThat(result.verdicts()).isEmpty();
         verify(judge, never()).judge(anyString(), anyList());
         verifyNoInteractions(metricDao, conflictDao);
+    }
+
+    @Test
+    void 候选超过10个时_embed分批调用不超DashScope批量上限() {
+        // 12 个正交候选（互不冲突）→ embed 应分两批（10 + 2），任何一批不得超过 10 条
+        List<KbDocument> docs = new ArrayList<>();
+        List<RepChunkView> candidates = new ArrayList<>();
+        Map<String, float[]> vectors = new HashMap<>();
+        for (int i = 0; i < 12; i++) {
+            String content = "候选文本" + i;
+            docs.add(docOf("doc" + i, LocalDate.of(2025, 1, 1)));
+            candidates.add(view("c-" + i, "doc" + i, content));
+            float[] v = new float[12];
+            v[i] = 1f;
+            vectors.put(content, v);
+        }
+        RetrievalConflictGuard guard = newGuard(true, null, docs, vectors);
+
+        GuardResult result = guard.apply("批量上限回归", candidates);
+
+        assertThat(result.kept()).hasSize(12);
+        ArgumentCaptor<List<String>> captor = ArgumentCaptor.forClass(List.class);
+        verify(embeddingModel, times(2)).embed(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(batch -> assertThat(batch.size()).isLessThanOrEqualTo(10));
+        assertThat(captor.getAllValues().stream().mapToInt(List::size).sum()).isEqualTo(12);
+        verify(judge, never()).judge(anyString(), anyList());
+    }
+
+    @Test
+    void 跨主题误检桥不并组_独立冲突组各自裁决() {
+        // 场景回归：病假对（2026-01-01 vs 2025-01-01）+ 年假对（均 2026-10-04 并列最晚），
+        // LLM 误检桥（病假new ~ 年假A，entity=员工 attribute=假期）若把 4 chunk 并为一组，
+        // 整组按 max 日期并列最晚 → KEPT_BOTH，病假旧版逃逸裁决。
+        // 修复后按 (entity, attribute) 主题键聚簇独立并查集：病旧被移除、年假对双保留。
+        List<KbDocument> docs = List.of(
+                docOf("docA", LocalDate.of(2026, 10, 4)),
+                docOf("docB", LocalDate.of(2026, 10, 4)),
+                docOf("docC", LocalDate.of(2026, 1, 1)),
+                docOf("docD", LocalDate.of(2025, 1, 1)));
+        String txtA = "公司年假10天";
+        String txtB = "公司年假15天";
+        String txtC = "公司病假12天";
+        String txtD = "公司病假6天";
+        Map<String, float[]> vectors = Map.of(
+                txtA, new float[]{1f, 0f}, txtB, new float[]{1f, 0f},
+                txtC, new float[]{1f, 0f}, txtD, new float[]{1f, 0f});
+        RetrievalConflictGuard guard = newGuard(true, null, docs, vectors);
+        when(judge.judge(anyString(), anyList())).thenAnswer(inv -> {
+            List<RepChunkView> pair = inv.getArgument(1);
+            Set<String> ids = Set.of(pair.get(0).childId(), pair.get(1).childId());
+            String a = pair.get(0).childId();
+            String b = pair.get(1).childId();
+            if (ids.equals(Set.of("c-a", "c-b"))) {
+                return Optional.of(new ConflictVerdict(a, b, "年假", "天数", "10天", "15天"));
+            }
+            if (ids.equals(Set.of("c-c", "c-d"))) {
+                return Optional.of(new ConflictVerdict(a, b, "病假", "天数", "12天", "6天"));
+            }
+            // 跨主题误检桥：entity/attribute 与两真实冲突组都不同
+            return Optional.of(new ConflictVerdict(a, b, "员工", "假期天数", "x", "y"));
+        });
+        when(conflictDao.findAll()).thenReturn(List.of());
+
+        GuardResult result = guard.apply("公司年假有几天", List.of(
+                view("c-a", "docA", txtA), view("c-b", "docB", txtB),
+                view("c-c", "docC", txtC), view("c-d", "docD", txtD)));
+
+        // 病假簇独立裁决：c-d（2025-01-01）被 c-c（2026-01-01）淘汰；
+        // 年假簇并列最晚 → 双保留 + 标注；误检桥簇（含全部 4 chunk）并列最晚 → 不再移除任何 chunk
+        assertThat(result.kept()).extracting(RepChunkView::childId)
+                .containsExactly("c-a", "c-b", "c-c");
+        assertThat(savedMetrics()).anyMatch(m -> "CONFLICT_GUARD_REMOVED".equals(m.getEventType())
+                && "c-d".equals(m.getChunkId()));
+        assertThat(result.conflictNote()).isNotBlank();
+        assertThat(result.conflictNote()).contains("年假");
     }
 
     // ---------- 检索链路集成（RetrievalService 接线） ----------

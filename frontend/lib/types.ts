@@ -341,6 +341,37 @@ export interface MetricsAggregation {
   recallRate?: number;
   staleKnowledgeCount?: number;
   staleKnowledge?: StaleKnowledgeItem[];
+  answerEval?: AnswerEvalSummary | null;
+}
+
+/** RAG 回答评测三率汇总（率可能为 null=分母 0，禁止显示为 0%）。 */
+export interface AnswerEvalSummary {
+  judgedCount?: number;
+  pendingCount?: number;
+  failedCount?: number;
+  accuracyRate?: number | null;
+  faithfulnessRate?: number | null;
+  relevanceRate?: number | null;
+  accuracyJudged?: number;
+  faithfulnessJudged?: number;
+  relevanceJudged?: number;
+}
+
+/** GET /api/metrics/answer-eval/samples；faithfulness/relevance 为 null 表示无法评判。 */
+export interface AnswerEvalSampleItem {
+  id: number;
+  sessionId: string;
+  question: string | null;
+  answer: string | null;
+  channel: string | null;
+  judgeModel: string | null;
+  faithfulness: number | null;
+  relevance: number | null;
+  verdictReason: string | null;
+  status: string;
+  error: string | null;
+  createdAt: string;
+  judgedAt: string | null;
 }
 
 // ============ 统一可观测 ============

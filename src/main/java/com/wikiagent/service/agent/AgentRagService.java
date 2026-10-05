@@ -66,6 +66,9 @@ public class AgentRagService {
             你是企业知识库的检索质量评估器。根据用户问题与已检索到的参考资料，判断资料是否足以回答问题：
             - sufficient=true：资料包含直接回答问题的关键事实
             - sufficient=false：资料为空、不相关、只覆盖部分要点或缺少关键信息
+            - 特别注意：若资料中存在两份来源对同一事项给出不同数值/结论，且资料中已出现
+              "【冲突提示】"段落明确标注两说并存，则 sufficient 必须为 true——
+              "存在互相矛盾的两种规定"本身就是对用户有价值的事实，不得因资料矛盾而判不足。
             只输出一个 JSON，不要输出任何其他文字：
             {"sufficient":true,"refinedQuery":""}
             当 sufficient=false 时，在 refinedQuery 中给出一个更适合下一轮检索的改写查询
@@ -262,6 +265,14 @@ public class AgentRagService {
                 queries = List.of(rewriter.rewrite(question));
                 log.debug("第 {} 轮证据为空，改写后重检: {}", round, queries);
                 continue;
+            }
+
+            // 冲突双保留（KEPT_BOTH）：资料命中且系统已显式标注"两说并存、需人工核对"，
+            // 矛盾本身就是要呈现给用户的答案，跳过充分性评估直接生成，
+            // 避免评估器把"资料互相矛盾"误判为证据不足而走联网兜底（用例5实测根因）。
+            if (result.conflict()) {
+                log.info("检索结果含冲突标注，跳过充分性评估直接生成（冲突两说需向用户呈现）: sessionId={}", sessionId);
+                break;
             }
 
             // 非空即评估（末轮也评估）：末轮评估的唯一用途是判定"弱命中→走未命中兜底"

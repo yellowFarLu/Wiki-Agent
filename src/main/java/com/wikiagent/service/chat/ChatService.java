@@ -1,6 +1,7 @@
 package com.wikiagent.service.chat;
 
 import com.wikiagent.application.agent.AgentOrchestrator;
+import com.wikiagent.application.knowledge.RagEvalSampleRecorder;
 import com.wikiagent.application.multiagent.MultiAgentOrchestrator;
 import com.wikiagent.application.multiagent.TenantKey;
 import com.wikiagent.config.WikiAgentProperties;
@@ -24,8 +25,10 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 对话编排入口（运行于 chatExecutor）。
@@ -59,6 +62,8 @@ public class ChatService {
     private final GuardrailAdvisorChain guardrailChain;
     private final FallbackAnswerService fallback;
     private final ChatHistoryService historyService;
+    /** RAG 回答质量评测样本采集器（wikiagent.answer-eval.enabled=false 时不装配，为 null 零影响）。 */
+    private final RagEvalSampleRecorder ragEvalRecorder;
     private final boolean multiAgentEnabled;
     private final boolean peroEnabled;
 
@@ -76,6 +81,7 @@ public class ChatService {
                        GuardrailAdvisorChain guardrailChain,
                        FallbackAnswerService fallback,
                        ChatHistoryService historyService,
+                       ObjectProvider<RagEvalSampleRecorder> ragEvalRecorderProvider,
                        @Value("${wikiagent.multi-agent.enabled:true}") boolean multiAgentEnabled,
                        @Value("${wikiagent.pero.enabled:true}") boolean peroEnabled) {
         this.props = props;
@@ -88,6 +94,7 @@ public class ChatService {
         this.guardrailChain = guardrailChain;
         this.fallback = fallback;
         this.historyService = historyService;
+        this.ragEvalRecorder = ragEvalRecorderProvider == null ? null : ragEvalRecorderProvider.getIfAvailable();
         this.multiAgentEnabled = multiAgentEnabled;
         this.peroEnabled = peroEnabled;
     }
@@ -135,6 +142,12 @@ public class ChatService {
         SseSender sse = new SseSender(emitter);
         String rawQuestion = request.question() == null ? "" : request.question().strip();
         String userId = request.identity() == null ? "anonymous" : request.identity();
+        // RAG 回答评测采集（方案 docs/rag-accuracy-eval.md）：闭包容器在 SSE 流期间被填充，
+        // done 前（onAnswer 回调）统一读取——sources 由 RagEvalCaptureSender 拦截，
+        // question/channel 由下方各分支赋值。
+        AtomicReference<List<RetrievalService.Source>> evalSources = new AtomicReference<>();
+        AtomicReference<String> evalQuestion = new AtomicReference<>();
+        AtomicReference<String> evalChannel = new AtomicReference<>();
         try {
             if (rawQuestion.isEmpty()) {
                 sse.send("error", Map.of("message", "问题不能为空"));
@@ -156,13 +169,19 @@ public class ChatService {
             // 通过才发 done 并持久化（SANITIZE 时落脱敏文本），违规则改发 blocked、
             // 答案不落 assistant 历史而写 blocked 标记（已发 delta 受 SSE 本质限制不撤回）。
             // 阻断审计复用 GuardrailAdvisorChain.checkOutput 内既有 GatewayAuditService。
-            sse = new StreamingOutputGuardrailSender(new SseSender(emitter),
+            // 最外层再套 RagEvalCaptureSender（capture(guardrail(base))）：拦截 sources 事件
+            // 供评测采集；采集动作在 onAnswer（答案已过输出网关脱敏，blocked 路径不采集）。
+            sse = new RagEvalCaptureSender(new StreamingOutputGuardrailSender(new SseSender(emitter),
                     guardrailChain, userId, sessionId,
                     new StreamingOutputGuardrailSender.AnswerFinalizer() {
                         @Override
                         public void onAnswer(String sid, String finalAnswer) {
                             if (finalAnswer != null && !finalAnswer.isBlank()) {
                                 historyService.save(sid, "assistant", finalAnswer);
+                            }
+                            if (ragEvalRecorder != null) {
+                                ragEvalRecorder.record(sid, userId, evalQuestion.get(), finalAnswer,
+                                        evalSources.get(), evalChannel.get());
                             }
                         }
 
@@ -172,7 +191,7 @@ public class ChatService {
                                     "[输出被安全网关拦截] type=" + violationType
                                             + " reason=" + truncateMarker(reason, 500));
                         }
-                    });
+                    }), evalSources);
 
             // === v5 §19 输入安全网关（注入检测 / PII 脱敏 / 合规）===
             GuardrailAdvisorChain.ChainResult inputResult =
@@ -186,12 +205,14 @@ public class ChatService {
                 return;
             }
             String question = inputResult.content() == null ? rawQuestion : inputResult.content().strip();
+            evalQuestion.set(question);
 
             // === 优先级 1：v6 Multi-Agent（PERO 开启 + 9×6 路由字段齐全）===
             if (peroEnabled && multiAgentEnabled && multiAgent.enabled()
                     && request.domain() != null && request.subDomain() != null) {
                 String identity = request.identity() == null ? "any" : request.identity();
                 TenantKey key = new TenantKey(request.domain(), request.subDomain(), identity);
+                evalChannel.set("multi-agent");
                 multiAgent.run(key, userId, sessionId, question, sse);
                 return;
             }
@@ -199,17 +220,20 @@ public class ChatService {
             // === 优先级 2：v1-v2 Plan-Execute-Reflexion 主循环（pero.enabled=false）===
             AgentOrchestrator v1v2 = v1v2OrchestratorProvider.getIfAvailable();
             if (!peroEnabled && v1v2 != null) {
+                evalChannel.set("orchestrator-v1v2");
                 v1v2.run(userId, sessionId, question, sse);
                 return;
             }
 
             // === 优先级 3：§2 Agentic RAG ===
             if (props.agent() != null && props.agent().enabled()) {
+                evalChannel.set("agent-rag");
                 agentRag.run(userId, sessionId, question, sse);
                 return;
             }
 
             // === 优先级 4：简单 RAG 固定管道 ===
+            evalChannel.set("legacy-rag");
             legacyChat(question, sse);
         } catch (Exception e) {
             log.error("对话处理失败", e);
@@ -254,5 +278,41 @@ public class ChatService {
         }
         String oneLine = s.replace('\n', ' ').replace('\r', ' ');
         return oneLine.length() <= maxLen ? oneLine : oneLine.substring(0, maxLen);
+    }
+
+    /**
+     * RAG 回答评测采集装饰器（方案 docs/rag-accuracy-eval.md）：拦截 {@code sources} SSE 事件
+     * 缓存引用来源（父文档粒度），其余事件原样透传。采集动作不在本类——由 AnswerFinalizer.onAnswer
+     * 统一触发（答案此时已过输出安全网关脱敏，blocked 路径天然不采集）。
+     */
+    private static final class RagEvalCaptureSender extends SseSender {
+
+        private final SseSender delegate;
+        private final AtomicReference<List<RetrievalService.Source>> out;
+
+        RagEvalCaptureSender(SseSender delegate, AtomicReference<List<RetrievalService.Source>> out) {
+            super();
+            this.delegate = delegate;
+            this.out = out;
+        }
+
+        @Override
+        public boolean send(String event, Object data) {
+            if ("sources".equals(event) && data instanceof List<?> list) {
+                List<RetrievalService.Source> sources = new ArrayList<>();
+                for (Object o : list) {
+                    if (o instanceof RetrievalService.Source s) {
+                        sources.add(s);
+                    }
+                }
+                out.set(sources);
+            }
+            return delegate.send(event, data);
+        }
+
+        @Override
+        public void complete() {
+            delegate.complete();
+        }
     }
 }

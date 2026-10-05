@@ -69,8 +69,17 @@ public class RetrievalService {
                          String artifactId, double score, String filename) {
     }
 
-    /** context 为空表示知识库中没有检索到相关内容。 */
-    public record RetrievalResult(List<Source> sources, String context) {
+    /**
+     * context 为空表示知识库中没有检索到相关内容。
+     *
+     * @param conflict 本次结果是否含冲突标注（ConflictGuard KEPT_BOTH 双保留）；
+     *                 为 true 时"存在互相矛盾的两说"本身就是可回答的事实，
+     *                 CRAG 充分性评估不得将其判为证据不足而触发联网兜底
+     */
+    public record RetrievalResult(List<Source> sources, String context, boolean conflict) {
+        public RetrievalResult(List<Source> sources, String context) {
+            this(sources, context, false);
+        }
     }
 
     /** 多轮检索累积器：按父块 ID 去重的命中集合。 */
@@ -726,7 +735,8 @@ public class RetrievalService {
         if (conflictNote != null && !conflictNote.isBlank()) {
             ctx.append(conflictNote);
         }
-        return new RetrievalResult(sources, ctx.toString());
+        return new RetrievalResult(sources, ctx.toString(),
+                conflictNote != null && !conflictNote.isBlank());
     }
 
     /**

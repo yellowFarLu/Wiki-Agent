@@ -144,9 +144,7 @@ public class RetrievalConflictGuard {
     private GuardResult doApply(String query, List<RepChunkView> candidates, double coarseCosine) {
         // 粗筛：重 embed 代表子块（优先精确缓存），O(k²) 余弦 + 关键 token 复判
         List<String> texts = candidates.stream().map(RepChunkView::content).toList();
-        List<float[]> vectors = embeddingCache == null
-                ? embeddingModel.embed(texts)
-                : embeddingCache.embedAll(embeddingModelName, texts, embeddingModel::embed);
+        List<float[]> vectors = embedAllBatched(texts);
         if (vectors == null || vectors.size() != candidates.size() || vectors.stream().anyMatch(v -> v == null)) {
             log.warn("ConflictGuard 向量缺失（数量不齐/含 null），跳过粗筛");
             return passthrough(candidates);
@@ -182,15 +180,41 @@ public class RetrievalConflictGuard {
             saveMetric(v.chunkIdB(), EVENT_DETECTED);
         }
 
-        // 并查集：按冲突关系把 chunk 并成组（传递冲突组统一裁决）
-        Map<String, String> parent = new HashMap<>();
-        for (ConflictVerdict v : verdicts) {
-            union(parent, v.chunkIdA(), v.chunkIdB());
-        }
-        Map<String, List<RepChunkView>> groups = new LinkedHashMap<>();
+        // 并查集：按冲突关系把 chunk 并成组（传递冲突组统一裁决）。
+        // 同题约束：先按 (entity, attribute) 主题键聚簇，每簇独立并查集（独立 parent map）——
+        // 跨主题误检桥（如"病假12天"被误判与"年假15天"冲突）不会把两个独立冲突组并成
+        // 一组互相污染（实测：年假对并列最晚导致整组 KEPT_BOTH，病假旧版逃逸裁决）。
+        // 一个 chunk 被多个主题簇引用时分别参与各簇裁决，removed 取并集；误检桥自身
+        // 所在簇的裁决仍可能移除 chunk（LLM 精度残余风险），靠 judge prompt 负例 + 冲突单审计兜底。
+        Map<String, RepChunkView> byId = new LinkedHashMap<>();
         for (RepChunkView c : candidates) {
-            if (parent.containsKey(c.childId())) {
-                groups.computeIfAbsent(find(parent, c.childId()), k -> new ArrayList<>()).add(c);
+            byId.put(c.childId(), c);
+        }
+        Map<String, List<ConflictVerdict>> byTopic = new LinkedHashMap<>();
+        for (ConflictVerdict v : verdicts) {
+            byTopic.computeIfAbsent(topicKey(v), k -> new ArrayList<>()).add(v);
+        }
+        List<List<RepChunkView>> groups = new ArrayList<>();
+        List<List<ConflictVerdict>> groupVerdicts = new ArrayList<>();
+        Set<String> bridgedChunks = new HashSet<>();
+        for (List<ConflictVerdict> sameTopic : byTopic.values()) {
+            Map<String, String> parent = new HashMap<>();
+            for (ConflictVerdict v : sameTopic) {
+                union(parent, v.chunkIdA(), v.chunkIdB());
+            }
+            Map<String, List<RepChunkView>> clusterGroups = new LinkedHashMap<>();
+            for (String chunkId : parent.keySet()) {
+                RepChunkView view = byId.get(chunkId);
+                if (view != null) {
+                    clusterGroups.computeIfAbsent(find(parent, chunkId), k -> new ArrayList<>()).add(view);
+                }
+                if (!bridgedChunks.add(chunkId)) {
+                    log.warn("ConflictGuard chunk 被多个主题簇引用（跨主题误检桥），各簇独立裁决: chunkId={}", chunkId);
+                }
+            }
+            for (List<RepChunkView> g : clusterGroups.values()) {
+                groups.add(g);
+                groupVerdicts.add(sameTopic);
             }
         }
 
@@ -202,8 +226,8 @@ public class RetrievalConflictGuard {
         Map<String, KbDocument> docs = loadDocs(chunkToDoc);
         Set<String> removed = new HashSet<>();
         StringBuilder note = new StringBuilder();
-        for (List<RepChunkView> group : groups.values()) {
-            arbitrate(group, docs, chunkToDoc, verdicts, removed, note);
+        for (int i = 0; i < groups.size(); i++) {
+            arbitrate(groups.get(i), docs, chunkToDoc, groupVerdicts.get(i), removed, note);
         }
 
         List<RepChunkView> kept = new ArrayList<>(candidates.size());
@@ -214,6 +238,26 @@ public class RetrievalConflictGuard {
         }
         String conflictNote = note.length() == 0 ? null : note.toString();
         return new GuardResult(kept, conflictNote, List.copyOf(verdicts));
+    }
+
+    /**
+     * 分批 embed：DashScope text-embedding 单次批量上限 10，超过直接 HTTP 400。
+     * 按 10 条一批调用（逐批走缓存摊薄），聚合返回与入参等长的向量列表。
+     */
+    private List<float[]> embedAllBatched(List<String> texts) {
+        final int batchSize = 10;
+        List<float[]> out = new ArrayList<>(texts.size());
+        for (int i = 0; i < texts.size(); i += batchSize) {
+            List<String> part = texts.subList(i, Math.min(i + batchSize, texts.size()));
+            List<float[]> v = embeddingCache == null
+                    ? embeddingModel.embed(part)
+                    : embeddingCache.embedAll(embeddingModelName, part, embeddingModel::embed);
+            if (v == null) {
+                return List.of();
+            }
+            out.addAll(v);
+        }
+        return out;
     }
 
     /** 组内裁决：唯一最晚 → 其余移除；否则整组保留 + 标注。 */
@@ -316,8 +360,9 @@ public class RetrievalConflictGuard {
         e.setSource(CONFLICT_SOURCE);
         e.setResolutionHint("CONFLICT");
         conflictDao.save(e);
-        log.info("ConflictGuard 检出冲突，写冲突单: {} ~ {} sim={}",
-                v.chunkIdA(), v.chunkIdB(), String.format("%.4f", similarity));
+        log.info("ConflictGuard 检出冲突，写冲突单: {} ~ {} sim={} entity={} attribute={} valueA={} valueB={}",
+                v.chunkIdA(), v.chunkIdB(), String.format("%.4f", similarity),
+                v.entity(), v.attribute(), v.valueA(), v.valueB());
     }
 
     private void saveMetric(String chunkId, String eventType) {
@@ -364,6 +409,12 @@ public class RetrievalConflictGuard {
         parent.putIfAbsent(a, a);
         parent.putIfAbsent(b, b);
         parent.put(find(parent, a), find(parent, b));
+    }
+
+    /** 主题键：LLM 返回的 (entity, attribute) 小写；null 时退化为空串避免 NPE。 */
+    private static String topicKey(ConflictVerdict v) {
+        return (v.entity() == null ? "" : v.entity().toLowerCase()) + "::"
+                + (v.attribute() == null ? "" : v.attribute().toLowerCase());
     }
 
     /** 余弦相似度（写冲突单 similarity 字段用；与 ConflictCandidateDetector 同算法）。 */

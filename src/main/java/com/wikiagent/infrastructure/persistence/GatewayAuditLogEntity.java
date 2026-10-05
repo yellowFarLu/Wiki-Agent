@@ -35,10 +35,10 @@ public class GatewayAuditLogEntity {
     @Column(name = "risk_score")
     private Double riskScore;
 
-    @Column(name = "input_summary", length = 4000)
+    @Column(name = "input_summary", columnDefinition = "TEXT")
     private String inputSummary;
 
-    @Column(name = "output_summary", length = 4000)
+    @Column(name = "output_summary", columnDefinition = "TEXT")
     private String outputSummary;
 
     @Column(name = "action_taken")

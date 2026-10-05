@@ -114,8 +114,12 @@ class ChatServiceOutputGuardrailTest {
     }
 
     private ChatService service() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<com.wikiagent.application.knowledge.RagEvalSampleRecorder> ragEvalRecorder =
+                mock(ObjectProvider.class);
+        when(ragEvalRecorder.getIfAvailable()).thenReturn(null);
         return new ChatService(props, agentRag, rewriter, retrieval, streamer, multiAgent,
-                v1v2, chain, fallback, history, false, false);
+                v1v2, chain, fallback, history, ragEvalRecorder, false, false);
     }
 
     private void stubStream(String answer, AtomicReference<String> mdcSnapshot) {

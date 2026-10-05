@@ -196,6 +196,19 @@ public class TaskWorker implements TaskMessageSink {
         ScheduledExecutorService heartbeat = startHeartbeat(taskId);
         try {
             runTask(task, taskType);
+        } catch (Throwable t) {
+            // runTask 步骤循环未兜底的 Throwable（含 Error，如 StackOverflowError）此前会被
+            // MQ 客户端静默吞掉、仅在 30s 后表现为“看门狗判定心跳停更”，极难排查；这里先落
+            // 完整堆栈再原样抛出，不改变既有重试/回收语义。
+            log.error("任务执行抛出未捕获 Throwable，交回上层重试/回收 taskId={} attempt={} type={}: {}",
+                    taskId, task.attempt(), t.getClass().getName(), t.getMessage(), t);
+            if (t instanceof RuntimeException re) {
+                throw re;
+            }
+            if (t instanceof Error er) {
+                throw er;
+            }
+            throw new RuntimeException(t);
         } finally {
             heartbeat.shutdownNow();
             TaskControlContext.clear();
@@ -270,8 +283,11 @@ public class TaskWorker implements TaskMessageSink {
                     log.warn("心跳续约发现租约易主或任务已回收，本 worker 让位: taskId={} worker={}", taskId, workerId);
                 }
                 progressPort.publish(taskId, progressRef.get(), null);
-            } catch (Exception ignored) {
-                // 心跳失败不影响主流程；租约过期由恢复扫描兜底（Task 9）
+            } catch (Exception ex) {
+                // 心跳失败不影响主流程；租约过期由恢复扫描兜底（Task 9）。
+                // 不可完全静默：持续失败会被看门狗判“心跳停更”而反复回收任务，必须留下可观测证据。
+                log.warn("心跳续租失败（将由恢复扫描兜底）taskId={} worker={}: {}",
+                        taskId, workerId, ex.toString());
             }
         }), props.getHeartbeatSec(), props.getHeartbeatSec(), TimeUnit.SECONDS);
         return heartbeat;

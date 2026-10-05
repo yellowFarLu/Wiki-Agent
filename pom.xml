@@ -25,7 +25,11 @@
         <pdfbox.version>3.0.8</pdfbox.version>
         <poi-ooxml.version>5.5.1</poi-ooxml.version>
         <tika.version>3.3.2</tika.version>
-        <redisson.version>3.45.0</redisson.version>
+        <!-- 必须与 Spring Boot 3.5.x / spring-data-redis 3.5 对齐：3.45.0 传递的
+             redisson-spring-data-34 未实现 3.5 新增的 pExpire(k,ms,ExpirationOptions.Condition)，
+             会落入 DefaultedRedisConnection 默认方法自递归导致 StackOverflowError；
+             3.52.0 改用 redisson-spring-data-35。 -->
+        <redisson.version>3.52.0</redisson.version>
         <!-- 子项目 A：RocketMQ 经典 Remoting 客户端（避开 rocketmq-spring-starter 的 javax 兼容问题） -->
         <rocketmq.version>5.3.1</rocketmq.version>
         <!-- CI 集成测试：Testcontainers（MySQL/Redis/RocketMQ） -->

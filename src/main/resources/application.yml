@@ -40,6 +40,7 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # 免密实例留空即可；RedissonNoPasswordCustomizer 会把空密码归一为 null，避免误发 AUTH
       password: ${REDIS_PASSWORD:}
 
   # Spring AI DashScope
@@ -171,6 +172,16 @@ wikiagent:
     tau-frequency-days: 30                             # 使用频率衰减常数
     stale-threshold: 0.3                               # stale_score < 0.3 视为过期知识
     aggregation-cron: "0 0 2 * * ?"                    # 每日 02:00 聚合作业
+
+  # 知识看板 RAG 回答质量在线评测（LLM-as-judge 线上抽样，方案 docs/rag-accuracy-eval.md）
+  answer-eval:
+    enabled: ${WIKIAGENT_ANSWER_EVAL_ENABLED:true}     # 采集+评判总开关；关闭时看板如实显示暂无数据
+    sample-rate: ${WIKIAGENT_ANSWER_EVAL_SAMPLE_RATE:1.0}   # 采集采样率 0~1
+    judge:
+      cron: "0 20 * * * ?"                             # 每小时第 20 分钟评判一批（02:00 聚合前纳入 01:20 批次）
+      batch-size: 50                                   # 单批评判条数上限
+      max-attempts: 3                                  # 单条最多尝试次数，超过置 FAILED
+      context-char-budget: 6000                        # 引用上下文总字符预算
 
   # v5 §19 Agent 安全网关
   gateway:

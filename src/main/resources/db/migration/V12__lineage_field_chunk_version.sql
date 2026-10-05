@@ -6,6 +6,6 @@ ALTER TABLE extracted_field ADD COLUMN page_no INT;
 ALTER TABLE extracted_field ADD COLUMN snippet TEXT;
 
 ALTER TABLE kb_child_chunk ADD COLUMN version_no INT NOT NULL DEFAULT 1;
-ALTER TABLE kb_child_chunk ADD COLUMN is_active TINYINT NOT NULL DEFAULT 1;
+ALTER TABLE kb_child_chunk ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1;
 
 CREATE INDEX idx_child_doc_active ON kb_child_chunk (doc_id, is_active);

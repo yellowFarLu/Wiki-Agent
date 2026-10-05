@@ -6,6 +6,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { useRouter } from 'next/navigation';
 import type { ColumnsType } from 'antd/es/table';
 import { deleteDocument, listDocuments } from '@/lib/api';
+import { formatDateTime } from '@/lib/datetime';
 import type { DocumentView } from '@/lib/types';
 import DocStatusTag from '@/components/common/DocStatusTag';
 
@@ -77,7 +78,7 @@ export default function RecentDocuments() {
     },
     { title: '父块', dataIndex: 'parentCount', key: 'parentCount', width: 70 },
     { title: '子块', dataIndex: 'childCount', key: 'childCount', width: 70 },
-    { title: '上传时间', dataIndex: 'createdAt', key: 'createdAt', width: 200 },
+    { title: '上传时间', dataIndex: 'createdAt', key: 'createdAt', width: 180, render: (v: string | null) => formatDateTime(v) },
     {
       title: '操作',
       key: 'op',

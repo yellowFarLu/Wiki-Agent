@@ -14,6 +14,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { getVersionDiff, getVersions } from '@/lib/api';
+import { formatDateTime } from '@/lib/datetime';
 import type { DocVersion, VersionDiff, VersionDiffField } from '@/lib/types';
 
 const VERSION_STATUS: Record<string, string> = {
@@ -86,7 +87,7 @@ export default function VersionHistoryTab() {
     { title: '父版本', dataIndex: 'parentVersionNo', key: 'parentVersionNo', width: 90, render: (v: number | null) => v ?? '-' },
     { title: '变更说明', dataIndex: 'changeSummary', key: 'changeSummary', render: (v: string | null) => v ?? '-' },
     { title: '创建人', dataIndex: 'createdBy', key: 'createdBy', width: 120 },
-    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 200 },
+    { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', width: 180, render: (v: string | null) => formatDateTime(v) },
   ];
 
   const diffColumns: ColumnsType<VersionDiffField> = [

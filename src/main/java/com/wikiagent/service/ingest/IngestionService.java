@@ -571,6 +571,14 @@ public class IngestionService {
         doc.setStatus(KbDocument.EMBEDDING);
         docRepo.save(doc);
         List<KbChildChunk> childEntities = childRepo.findByDocIdAndActiveTrue(docId);
+        // 全部子块被 L0 精确去重合并（纯重复上传）→ 内容已被既有 active chunk 覆盖，
+        // 直接 READY 终态，不写 Milvus（空 insert 会被 Milvus 以 num_rows=0 拒绝）
+        if (childEntities.isEmpty()) {
+            doc.setStatus(KbDocument.READY);
+            docRepo.save(doc);
+            log.info("文档全量重复，已合并到既有内容: docId={} filename={}", docId, doc.getFilename());
+            return false;
+        }
         int batch = Math.max(1, props.ingest().embeddingBatch());
         List<float[]> allVectors = new ArrayList<>(childEntities.size());
         for (int i = 0; i < childEntities.size(); i += batch) {
@@ -592,6 +600,10 @@ public class IngestionService {
     /** 步骤 6 索引校验 + READY 终态。 */
     public void finalizeStep(String docId) {
         KbDocument doc = requireDoc(docId);
+        // 全量重复合并路径已在 embedAndPersistStep 置 READY，直接跳过
+        if (KbDocument.READY.equals(doc.getStatus())) {
+            return;
+        }
         List<KbChildChunk> children = childRepo.findByDocIdAndActiveTrue(docId);
         if (children.isEmpty()) {
             throw new IllegalStateException("索引校验失败：无有效子块 docId=" + docId);
@@ -612,6 +624,10 @@ public class IngestionService {
     /**
      * 任务终态失败钩子（TaskHandler.onFailed → IngestTaskHandler）：把文档置 FAILED 并记录错误。
      * 不覆盖 READY/AI_SKIPPED 终态（任务已正常收尾后不允许回滚）。
+     * <p>
+     * 终态失败时下线该 doc 的全部子块：失败发生在 Milvus 写入前/中，active=true 的残留 chunk
+     * 从未进入索引，却会毒化后续同内容上传的 L0 精确去重判断（留旧→新块全灭→空 insert）。
+     * Milvus 侧尽力删除残留（可能已部分写入），失败仅告警不抛出。
      */
     public void markFailedStep(String docId, String errorMsg) {
         KbDocument doc = docRepo.findById(docId).orElse(null);
@@ -624,6 +640,18 @@ public class IngestionService {
         doc.setStatus(KbDocument.FAILED);
         doc.setError(errorMsg == null ? "任务失败" : errorMsg);
         docRepo.save(doc);
+        List<KbChildChunk> children = childRepo.findByDocIdAndActiveTrue(docId);
+        for (KbChildChunk ch : children) {
+            ch.setActive(false);
+        }
+        if (!children.isEmpty()) {
+            childRepo.saveAll(children);
+        }
+        try {
+            milvus.deleteByDocId(docId);
+        } catch (Exception e) {
+            log.warn("终态失败清理 Milvus 残留失败（忽略）docId={}: {}", docId, e.getMessage());
+        }
         log.warn("文档入库失败（任务终态）: docId={} filename={} error={}", docId, doc.getFilename(), errorMsg);
     }
 
@@ -683,9 +711,7 @@ public class IngestionService {
             runPipeline(docId, filename, bytes, tagContext);
         } catch (Exception e) {
             log.error("文档入库失败: {}", filename, e);
-            doc.setStatus(KbDocument.FAILED);
-            doc.setError(summarize(e));
-            docRepo.save(doc);
+            markFailedStep(docId, summarize(e));
         }
     }
 

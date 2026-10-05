@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS kb_parent_chunk (
     id            VARCHAR(64)   NOT NULL PRIMARY KEY,
     doc_id        VARCHAR(64)   NOT NULL,
     parent_index  INT           NOT NULL,
-    content       VARCHAR(20000) NOT NULL
+    content       MEDIUMTEXT    NOT NULL
 );
 
 -- 子文档块（小粒度，用于向量检索）

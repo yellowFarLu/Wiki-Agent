@@ -251,7 +251,7 @@ public class MilvusStoreService {
                 .searchRequests(List.of(denseReq, sparseReq))
                 .ranker(new RRFRanker(rrfK))
                 .limit(finalTopk)
-                .outFields(List.of("doc_id", "parent_id", "child_index", "version_no", "page_no"))
+                .outFields(List.of("doc_id", "parent_id", "child_index"))
                 .build();
 
         SearchResp resp = client().hybridSearch(req);
@@ -265,6 +265,7 @@ public class MilvusStoreService {
                     String.valueOf(entity.getOrDefault("doc_id", "")),
                     String.valueOf(entity.getOrDefault("parent_id", "")),
                     entity.get("child_index") instanceof Number n ? n.intValue() : 0,
+                    // 兼容旧 schema：version_no / page_no 在部分存量 collection 中不存在，取不到时按 1 / 0 处理
                     entity.get("version_no") instanceof Number vn ? vn.intValue() : 1,
                     entity.get("page_no") instanceof Number pn ? pn.intValue() : 0));
         }

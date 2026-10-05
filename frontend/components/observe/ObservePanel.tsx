@@ -29,6 +29,7 @@ import type {
   ObservabilityDashboard,
   TraceSpanItem,
 } from '@/lib/types';
+import { formatDateTime } from '@/lib/datetime';
 
 /** Tab 1: 执行路径 */
 function TracePane({ initialSessionId }: { initialSessionId?: string | null }) {
@@ -181,7 +182,7 @@ function KnowledgePane() {
     {
       title: '创建时间',
       dataIndex: 'createdAt',
-      render: (v: string | null) => (v ? new Date(v).toLocaleDateString() : '-'),
+      render: (v: string | null) => formatDateTime(v),
     },
   ];
 
@@ -238,7 +239,7 @@ function AuditPane() {
     {
       title: '时间',
       dataIndex: 'createdAt',
-      render: (v: string | null) => (v ? new Date(v).toLocaleString() : '-'),
+      render: (v: string | null) => formatDateTime(v),
     },
   ];
 
@@ -258,7 +259,7 @@ function AuditPane() {
     {
       title: '时间',
       dataIndex: 'createdAt',
-      render: (v: string | null) => (v ? new Date(v).toLocaleString() : '-'),
+      render: (v: string | null) => formatDateTime(v),
     },
   ];
 

@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -83,6 +84,13 @@ class AgentRagServiceTest {
                 context.isEmpty() ? List.of()
                         : List.of(new RetrievalService.Source(1, "doc1", 1, null, "片段", null, 0.9, "a.md")),
                 context);
+    }
+
+    private static RetrievalService.RetrievalResult conflictResult(String context) {
+        return new RetrievalService.RetrievalResult(
+                List.of(new RetrievalService.Source(1, "doc1", 1, null, "片段", null, 0.9, "a.md"),
+                        new RetrievalService.Source(2, "doc2", 1, null, "片段", null, 0.8, "b.md")),
+                context, true);
     }
 
     @Test
@@ -212,6 +220,24 @@ class AgentRagServiceTest {
 
         verify(streamer, never()).stream(any(Prompt.class), eq(sse), any(), any(), any());
         verify(fallback, times(1)).answer(eq("公司年假制度是怎样的？"), eq(sse));
+    }
+
+    @Test
+    void 冲突双保留时应跳过充分性评估直接生成而不是联网兜底() {
+        // 用例5 回归：两份资料冲突（年假10天 vs 15天）且 ConflictGuard 已双保留 + 冲突标注。
+        // 修复前 grade 把"资料矛盾"误判为证据不足，两轮后走 fallback；
+        // 修复后 conflict=true 短路评估，直接生成让用户看到两说，LLM 仅规划调用 1 次（无 grade）。
+        llmReturns("{\"mode\":\"search\",\"queries\":[\"年假\"]}");
+        when(retrieval.assemble(any(), any())).thenReturn(conflictResult(
+                "[1] 来源: a.md\n公司年假10天\n[2] 来源: b.md\n公司年假15天\n"
+                        + "【冲突提示】来源a.md与来源b.md冲突：年假天数分别为「10天」和「15天」，请人工核对。"));
+
+        service.run("u1", "s1", "公司年假有几天？", sse);
+
+        verify(retrieval, times(1)).search(any(), anyList());
+        verify(chatModel, times(1)).call(any(Prompt.class));
+        verify(streamer, times(1)).stream(any(Prompt.class), eq(sse), isNull(), eq("u1"), eq("s1"));
+        verify(fallback, never()).answer(anyString(), eq(sse));
     }
 
     @Test

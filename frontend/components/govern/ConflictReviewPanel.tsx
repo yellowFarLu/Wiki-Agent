@@ -28,6 +28,7 @@ import {
 import type { ConflictResolution } from '@/lib/api';
 import { getSettings } from '@/lib/settings';
 import type { ConflictChunkView, ConflictDiff, ConflictItem } from '@/lib/types';
+import { formatDateTime } from '@/lib/datetime';
 
 const STATUS_OPTIONS = [
   { value: 'DETECTED', label: '待处理' },
@@ -177,7 +178,7 @@ export default function ConflictReviewPanel() {
       title: '检出时间',
       dataIndex: 'detectedAt',
       width: 170,
-      render: (v: string | undefined) => (v ? new Date(v).toLocaleString() : '-'),
+      render: (v: string | undefined) => formatDateTime(v),
     },
   ];
 

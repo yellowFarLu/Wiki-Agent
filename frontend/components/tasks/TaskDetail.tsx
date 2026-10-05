@@ -30,6 +30,7 @@ import {
   suspendTask,
 } from '@/lib/api';
 import { subscribeTaskStream, type TaskStreamSubscription } from '@/lib/sse';
+import { formatDateTime } from '@/lib/datetime';
 import type { EventView, HumanTaskView, StepView, TaskView } from '@/lib/types';
 import TaskStatusTag from '@/components/common/TaskStatusTag';
 
@@ -270,8 +271,8 @@ export default function TaskDetail({ taskId }: { taskId: string }) {
             {task.attempt}/{task.maxAttempts}
           </Descriptions.Item>
           <Descriptions.Item label="提交人">{task.submittedBy}</Descriptions.Item>
-          <Descriptions.Item label="创建时间">{task.createdAt}</Descriptions.Item>
-          <Descriptions.Item label="更新时间">{task.updatedAt}</Descriptions.Item>
+          <Descriptions.Item label="创建时间">{formatDateTime(task.createdAt)}</Descriptions.Item>
+          <Descriptions.Item label="更新时间">{formatDateTime(task.updatedAt)}</Descriptions.Item>
           <Descriptions.Item label="租约持有">{task.leaseOwner ?? '-'}</Descriptions.Item>
           {task.errorMsg && (
             <Descriptions.Item label="错误信息" span={3}>
@@ -313,8 +314,8 @@ export default function TaskDetail({ taskId }: { taskId: string }) {
                 <div>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {s.stepType}
-                    {s.startedAt ? ` ｜ 开始 ${s.startedAt}` : ''}
-                    {s.endedAt ? ` ｜ 结束 ${s.endedAt}` : ''}
+                    {s.startedAt ? ` ｜ 开始 ${formatDateTime(s.startedAt)}` : ''}
+                    {s.endedAt ? ` ｜ 结束 ${formatDateTime(s.endedAt)}` : ''}
                   </Typography.Text>
                   {s.errorMsg && (
                     <div>
@@ -376,7 +377,7 @@ export default function TaskDetail({ taskId }: { taskId: string }) {
                     <Typography.Text strong>{e.eventType}</Typography.Text>
                     <Tag>{e.actorType}</Tag>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {e.actorId} ｜ {e.createdAt}
+                      {e.actorId} ｜ {formatDateTime(e.createdAt)}
                     </Typography.Text>
                   </Space>
                   {e.detail !== null && e.detail !== undefined && (

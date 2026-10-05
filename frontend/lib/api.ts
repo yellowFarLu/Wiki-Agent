@@ -2,6 +2,7 @@
 
 import { getSettings } from './settings';
 import type {
+  AnswerEvalSampleItem,
   BackendErrorBody,
   ChatMessageItem,
   ChatSessionItem,
@@ -269,6 +270,19 @@ export function submitFeedback(body: FeedbackRequest): Promise<unknown> {
 /** refresh=true 手动触发一次聚合后再返回快照。 */
 export function getMetricsAggregation(refresh = false): Promise<MetricsAggregation> {
   return request<MetricsAggregation>(`/api/metrics/aggregation${refresh ? '?refresh=true' : ''}`);
+}
+
+/** 最近 RAG 回答评测样本明细。 */
+export function getAnswerEvalSamples(limit = 20): Promise<AnswerEvalSampleItem[]> {
+  return request<AnswerEvalSampleItem[]>(`/api/metrics/answer-eval/samples?limit=${limit}`);
+}
+
+/** 手动触发一批 LLM 评判；未启用评测时后端返回 409。 */
+export function triggerAnswerEvalJudge(): Promise<{ enabled: boolean; judged?: number; failed?: number; message?: string }> {
+  return request<{ enabled: boolean; judged?: number; failed?: number; message?: string }>(
+    '/api/metrics/answer-eval/judge',
+    { method: 'POST' },
+  );
 }
 
 // ============ 统一可观测 ============
