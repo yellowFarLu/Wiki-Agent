@@ -61,12 +61,16 @@ public class ObservabilityController {
                 "totalTraces", "see /api/trace"
         ));
 
-        // Tab 2: 业务指标
+        // Tab 2: 业务指标（反馈计数与检索计数同为近 7 天窗口，避免跨窗口并排误读）
         List<MetricEventEntity> events = metricEventDao.findSince(since);
         long retrievals = events.stream().filter(e -> "RETRIEVED".equals(e.getEventType())).count();
         long citations = events.stream().filter(e -> "CITED".equals(e.getEventType())).count();
-        long useful = feedbackDao.findAll().stream().filter(f -> "USEFUL".equals(f.getFeedbackType())).count();
-        long useless = feedbackDao.findAll().stream().filter(f -> "USELESS".equals(f.getFeedbackType())).count();
+        Map<String, Long> feedbackCounts = new HashMap<>();
+        for (Object[] row : feedbackDao.countByCreatedAtAfterGroupByType(since)) {
+            feedbackCounts.merge((String) row[0], ((Number) row[1]).longValue(), Long::sum);
+        }
+        long useful = feedbackCounts.getOrDefault("USEFUL", 0L);
+        long useless = feedbackCounts.getOrDefault("USELESS", 0L);
         // Task 7：检索侧冲突守卫指标（近 7 天，按 eventType 计数）
         long conflictDetected = events.stream()
                 .filter(e -> "CONFLICT_GUARD_DETECTED".equals(e.getEventType())).count();

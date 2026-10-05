@@ -328,6 +328,21 @@ export interface StaleKnowledgeItem {
   staleScore: number;
 }
 
+/** 疑似无用知识：被检索访问过，且无用反馈占比（无用/(有用+无用)）严格超过 50%。 */
+export interface SuspectUselessKnowledgeItem {
+  chunkId: string;
+  docId: string | null;
+  domainTag: string | null;
+  subDomainTag: string | null;
+  sourceFilename: string | null;
+  createdBy: string | null;
+  retrievalCount: number;
+  usefulCount: number;
+  uselessCount: number;
+  totalFeedback: number;
+  uselessRatio: number;
+}
+
 /** GET /api/metrics/aggregation；未聚合时 aggregatedAt 为 null 且带 message。 */
 export interface MetricsAggregation {
   aggregatedAt: string | null;
@@ -337,10 +352,11 @@ export interface MetricsAggregation {
   totalCitations?: number;
   usefulCount?: number;
   uselessCount?: number;
-  usefulnessRate?: number;
   recallRate?: number;
   staleKnowledgeCount?: number;
   staleKnowledge?: StaleKnowledgeItem[];
+  suspectUselessKnowledgeCount?: number;
+  suspectUselessKnowledge?: SuspectUselessKnowledgeItem[];
   answerEval?: AnswerEvalSummary | null;
 }
 
@@ -372,6 +388,55 @@ export interface AnswerEvalSampleItem {
   error: string | null;
   createdAt: string;
   judgedAt: string | null;
+}
+
+/** RAGAS 历史执行行（GET /api/metrics/ragas/runs）；指标 null=无成功评分显示"-"。 */
+export interface RagasRun {
+  id: number;
+  runId: string;
+  status: 'RUNNING' | 'OK' | 'ERROR' | string;
+  judgeModel: string | null;
+  embeddingModel: string | null;
+  endpoint: string | null;
+  sampleCount: number;
+  durationSec: number | null;
+  faithfulness: number | null;
+  answerRelevancy: number | null;
+  contextPrecision: number | null;
+  contextRecall: number | null;
+  factualCorrectness: number | null;
+  semanticSimilarity: number | null;
+  reason: string | null;
+  outputLog: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+/** RAGAS 评测用例集单行：contexts/errors 为 JSON 字符串。 */
+export interface RagasSample {
+  id: number;
+  runId: string;
+  sampleId: string;
+  domainTag: string | null;
+  question: string;
+  contexts: string;
+  answer: string;
+  reference: string;
+  faithfulness: number | null;
+  answerRelevancy: number | null;
+  contextPrecision: number | null;
+  contextRecall: number | null;
+  factualCorrectness: number | null;
+  semanticSimilarity: number | null;
+  errors: string | null;
+  createdAt: string;
+}
+
+/** GET /api/metrics/ragas/runs/{runId}。 */
+export interface RagasRunDetail {
+  run: RagasRun;
+  samples: RagasSample[];
 }
 
 // ============ 统一可观测 ============

@@ -33,3 +33,40 @@ jobs:
           path: target/eval-report/EvalReport.json
           if-no-files-found: error
           retention-days: 30
+
+  # RAGAS 离线评测（ragas==0.4.3，见 eval/ragas/run_ragas_eval.py 头部说明）：
+  # 对 eval/ragas/golden-ragas.jsonl 黄金集跑 6 项 RAGAS 指标（faithfulness /
+  # answer_relevancy / context_precision_without_reference / context_recall /
+  # factual_correctness / semantic_similarity），judge 模型走 DashScope
+  # OpenAI 兼容端点（qwen-plus + text-embedding-v3），与线上同供应商。
+  # report-only 门禁：阈值待首次基线后按 docs/operations/eval-baseline.md §4 惯例约定。
+  # secrets.DASHSCOPE_API_KEY 未配置时脚本如实输出 SKIPPED 并退出 0（绝不编造分数）。
+  ragas-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: eval/ragas/requirements.txt
+
+      - name: Install ragas dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -r eval/ragas/requirements.txt
+
+      - name: Run RAGAS evaluation
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: .venv/bin/python eval/ragas/run_ragas_eval.py
+
+      - name: Upload ragas report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragas-report
+          path: target/ragas-report/ragas-report.json
+          if-no-files-found: error
+          retention-days: 30

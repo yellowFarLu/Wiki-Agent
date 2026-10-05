@@ -175,26 +175,74 @@ Milvus hybridSearch（每个查询 sub-topk=20）
 | HippoRAG | ❌ | 神经关联记忆创新性强，但工程落地与运维复杂度高 |
 | **LightRAG 思路（选用）** | ✅ | 实体级抽取 + 局部邻居扩展，增量友好；图存 MySQL 零新增中间件 |
 
-**入库侧（GraphExtractionService）**
+#### 3.1 图谱怎么存：MySQL 两张表（Flyway V17，无 Neo4j）
 
-- 每个 chunk 截断至 1500 字符送 `simpleChatModel`（qwen-plus），Prompt 限定：
-  - 实体 8 类：人物 / 组织 / 产品 / 地点 / 概念 / 事件 / 规则 / 其他
-  - 关系 9 类：属于 / 包含 / 依赖 / 影响 / 合作 / 对抗 / 引用 / 继承 / 其他
-  - 强约束"**只抽取文本明确提及的实体和关系，禁止编造**"
-- **实体消歧**：`name+type` 唯一冲突时 upsert 合并 description；跨文档共享同一图谱
-- **关系合并**：`source+target+type` 冲突时累加 weight（共现频次）
-- LLM 返回 JSON（兼容 markdown 包裹解析）；**抽取失败 catch + log.warn，不阻断入库主流程**
-- 文档删除时对图数据 `is_active=false` 软下线（Milvus 不支持 chunk 级删除的同一设计原则）
+图结构就是普通的关系表，由 [V17__graph_rag.sql](src/main/resources/db/migration/V17__graph_rag.sql) 建表，JPA 实体为 [GraphEntity.java](src/main/java/com/wikiagent/entity/graph/GraphEntity.java) / [GraphRelation.java](src/main/java/com/wikiagent/entity/graph/GraphRelation.java)：
 
-**检索侧（GraphRagService）**
+| 表 | 关键字段 | 约束/索引 |
+|---|---|---|
+| `graph_entity`（实体节点） | `name`、`type`（8 类）、`description`（LLM 一句话摘要）、`source_doc_id`、`source_chunk_id`（血缘回溯到具体子块）、`embedding_json`（预留列，当前不写入；实体匹配走名称 LIKE，向量索引预留在 Milvus 侧）、`is_active` | **唯一索引 `(name, type)` 做实体消歧**；name/type/doc/active 普通索引 |
+| `graph_relation`（关系边） | `source_entity_id` / `target_entity_id`（双外键指向实体表）、`relation_type`（9 类）、`description`、`weight`（共现频次累加）、`source_doc_id`、`source_chunk_id`、`is_active` | **唯一索引 `(source, target, type)` 做关系消歧**；source/target/type/doc 索引 |
 
-实体名模糊匹配 Top5（检索探针：整句优先，多词自然语言按 bigram/拉丁词拆解补充，避免「WMS 何时升级 3.0」这类改写查询匹配不到名为「仓储管理系统 WMS」的实体）→ 查出边/入边 1-hop 邻居（上限 10）→ 收集邻居实体关联的 chunkId → 映射父块后以固定 **0.5 分**累积进检索结果（中等置信：不压过向量高分，但能进入 rerank 被重新评估）；单轮注入 chunk 上限 20，防止 bigram 命中泛滥。图扩展在两条问答链路都挂接：普通 `retrieve(List)` 与 AgentRag 的每轮 CRAG 循环；图服务任何异常只 warn 不阻断向量主流程。
+- **全库一张共享图**：实体按 `name+type` upsert，不同文档抽到同名同类型实体时合并为同一节点（description 去重拼接、截断 2000 字），因此边天然能把**跨文档**的知识连起来；关系按 `source+target+type` 去重，再次共现时 `weight + 1.0`
+- **只软删不物理删**：文档删除/重解析时将关联节点和边置 `is_active=false`（仓库方法 `deactivateByDocId`），与 chunk 软删同一设计原则；所有检索查询都带 `active=true` 过滤
+- 仓库：[GraphEntityRepo.java](src/main/java/com/wikiagent/repo/graph/GraphEntityRepo.java)（名称精确/模糊查询、按文档查、软下线）、[GraphRelationRepo.java](src/main/java/com/wikiagent/repo/graph/GraphRelationRepo.java)（出边/入边查询、软下线）
 
-**可视化与 API**
+#### 3.2 入库时怎么构建：逐 chunk LLM 抽取 + upsert（fail-open）
+
+触发点在六步入库流水线把文档置为 READY 之后，由 [IngestionService.java](src/main/java/com/wikiagent/service/ingest/IngestionService.java) 调用（整体跑在 `@Async` 入库线程/任务框架 Worker 中，不阻塞上传请求），核心逻辑在 [GraphExtractionService.java](src/main/java/com/wikiagent/application/graph/GraphExtractionService.java)：
+
+```text
+文档六步流水线完成（READY）
+  └─ 对每个有效子块 KbChildChunk：
+       ① 正文截断至 max-chars-per-chunk=1500 字符
+       ② 调 simpleChatModel（qwen-plus），System Prompt 限定输出 JSON：
+          · 实体 8 类：人物/组织/产品/地点/概念/事件/规则/其他
+          · 关系 9 类：属于/包含/依赖/影响/合作/对抗/引用/继承/其他
+          · 强约束"只抽取文本明确提及的内容，禁止编造"，无内容返回空数组
+       ③ 容错解析 JSON（兼容 ```json markdown 包裹），类型不在白名单归一化为"其他"
+       ④ 实体 upsert（name+type 合并 description）→ 关系仅在两端实体都存在时 upsert（weight+1）
+       ⑤ 单 chunk 失败：catch + log.warn 后返回空结果，不阻断入库（无 DashScope Key 同样逐 chunk 跳过）
+```
+
+- 删除文档时 [IngestionService.delete](src/main/java/com/wikiagent/service/ingest/IngestionService.java) 调 `deactivateByDocId` 同步软下线图数据（失败仅告警）
+- 装配开关：Bean 上的 `@ConditionalOnProperty(wikiagent.graph.enabled)` + 入库/检索两侧的 `ObjectProvider` 空回退，关闭后流水线与检索主链路零感知
+
+#### 3.3 检索时怎么起作用：实体探针 → 1-hop 邻居 → 0.5 分注入 → rerank 裁决
+
+图检索服务 [GraphRagService.java](src/main/java/com/wikiagent/application/graph/GraphRagService.java) 本身只做"实体→邻居→chunkId 集合"的图查询；真正与向量检索合流发生在 [RetrievalService.graphExpand](src/main/java/com/wikiagent/service/retrieve/RetrievalService.java)：
+
+```text
+retrieve(List<查询>)
+  ① Milvus hybridSearch 双路召回（Dense + BM25/RRF），命中累积进 Accumulator
+  ② graphExpand（图增强，开关开启时）：
+       对每个查询生成探针：整句优先 + 中文 bigram/拉丁词拆解（与本地降级同一套分词）
+         → GraphRagService.searchWithExpansion(probe)：
+             · name LIKE %probe% 取 Top5 匹配实体（只取 active）
+             · 查出边 + 入边，扩展 1-hop 邻居（上限 max-neighbors=10）
+             · 收集"匹配实体自身 + 各条边"携带的 sourceChunkId
+         → 按 chunkId 批量回查 kb_child_chunk，只收 active 子块
+         → 映射回父块，以固定 0.5 中等置信分 acc.put 进同一候选池
+         · 护栏：单轮最多注入 20 个 chunk（GRAPH_MAX_INJECTED_CHUNKS），防 bigram 命中泛滥
+  ③ assemble：rerank 对"向量候选 + 图候选"统一精排 → ConflictGuard 冲突裁决
+     → 字符预算内组装父块上下文（图注入的块与向量块走完全相同的后续流程）
+```
+
+几个关键设计：
+
+- **为什么是固定 0.5 分**：图命中代表"实体关联"而非"语义相似"，给中等置信分既不会压过向量高分，又保证它进入 rerank 候选池接受二次相关性裁决；Accumulator 按父块去重时向量/图**两路取最高分**
+- **为什么要 bigram 探针**：实体名在图里叫「仓储管理系统 WMS」，而用户问「WMS 什么时候升级 3.0」，整句 LIKE 必然落空；拆出拉丁词 `wms` 探针才能命中（[RetrievalGraphExpandTest.java](src/test/java/com/wikiagent/service/retrieve/RetrievalGraphExpandTest.java) 锁定该行为：向量路零命中时仅靠图扩展也能召回，且分数恰为 0.5）
+- **两条问答链路都挂接**：普通问答走 `RetrievalService.retrieve(List)`（内部自动调用）；AgentRag 手工编排 search/assemble 的 CRAG 多轮循环，在 [AgentRagService.java](src/main/java/com/wikiagent/service/agent/AgentRagService.java) 每轮显式补调 `retrieval.graphExpand(acc, queries)`，否则 PERO 关闭路径下图谱永不生效
+- **故障隔离**：图查询/回查任何异常只 `log.warn`，向量检索主流程照常出结果（测试用例"图服务异常时向量检索主流程不受影响"固化此契约）
+
+#### 3.4 可视化、REST API 与开关
 
 - 前端 `/graph`：零依赖 Canvas **自实现力导向布局**（圆形初始化 + 50 轮斥力/弹簧引力/向心力迭代），实体类型配色，支持搜索、点击实体跳转来源文档
-- `GET /api/graph/stats|/search?q=|/entity/{id}|/entity/{id}/neighbors|/doc/{docId}`
-- 开关：`WIKIAGENT_GRAPH_ENABLED=true`（默认开启，`@ConditionalOnProperty` + 调用侧 `ObjectProvider` 空回退；无 DashScope Key 时逐 chunk 告警跳过，主链路零影响）
+- REST（[GraphRagController.java](src/main/java/com/wikiagent/interfaces/graph/GraphRagController.java)，与服务同条件装配）：
+  `GET /api/graph/stats | /search?q= | /entity/{id} | /entity/{id}/neighbors | /doc/{docId}`
+  （统计 / 实体搜索+邻居扩展 / 实体详情 / 实体 1-hop 邻居 / 文档子图）
+- 开关：`WIKIAGENT_GRAPH_ENABLED=true`（**默认开启**；`@ConditionalOnProperty` + 调用侧 `ObjectProvider` 空回退；无 DashScope Key 时逐 chunk 告警跳过，主链路零影响）
+- 调参：`wikiagent.graph.max-chars-per-chunk=1500`（单 chunk 送抽取模型字符上限）、`wikiagent.graph.max-neighbors=10`（邻居扩展上限）
 
 ### 4️⃣ 分层记忆（横向扩展友好）
 
@@ -397,7 +445,7 @@ PENDING ─► DISPATCH ─► RUNNING ─┬─► COMPLETED ✅
 | DashScope Key | NoOpChatModel + Embedding NoOp，应用仍健康 UP，问答走规则兜底 |
 | Presidio | PII 检测按配置跳过，不阻断输出 |
 | rerank | 无 Key 自动跳过；调用失败保持原序 |
-| GraphRAG | 默认关；开启后抽取失败不阻断入库 |
+| GraphRAG | 默认开启（`WIKIAGENT_GRAPH_ENABLED`）；关闭后相关 Bean 不装配、入库/检索零感知；开启时抽取/图查询失败均只告警不阻断主链路 |
 
 ---
 

@@ -89,16 +89,14 @@ public class FeedbackController {
         List<KbFeedbackEntity> feedbacks = feedbackDao.findByChunkId(chunkId);
         long useful = feedbacks.stream().filter(f -> "USEFUL".equals(f.getFeedbackType())).count();
         long useless = feedbacks.stream().filter(f -> "USELESS".equals(f.getFeedbackType())).count();
-        double usefulnessRate = (useful + useless) > 0
-                ? (double) useful / (useful + useless) : 0.0;
 
+        // 仅返回有用/无用原始计数，不再提供易被挑战的"有用率"比率；
+        // 疑似无用知识（无用占比>50%）统一由知识看板聚合输出。
         Map<String, Object> stats = new HashMap<>();
         stats.put("chunkId", chunkId);
         stats.put("totalFeedback", feedbacks.size());
         stats.put("usefulCount", useful);
         stats.put("uselessCount", useless);
-        stats.put("usefulnessRate", usefulnessRate);
-        stats.put("uselessnessRate", 1.0 - usefulnessRate);
         return ResponseEntity.ok(stats);
     }
 }

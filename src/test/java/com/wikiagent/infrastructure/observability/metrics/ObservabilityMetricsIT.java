@@ -151,6 +151,10 @@ class ObservabilityMetricsIT {
         String taskId = JSON.readTree(result.getResponse().getContentAsString()).get("taskId").asText();
         await(() -> taskRepo.findByTaskId(taskId).map(TaskInstance::status)
                 .filter(s -> s == TaskStatus.COMPLETED).isPresent(), 15_000);
+        // 状态落库先于 Timer 记录（TaskWorker 在 runTask 返回后的完成点才 stop 计时样本），
+        // 断言前等待计时器出现，消除测试线程与工作线程的读写竞态
+        await(() -> meterRegistry.find("wikiagent.task.duration.seconds")
+                .tag("taskType", "OBS_METRICS").tag("result", "completed").timer() != null, 15_000);
 
         assertThat(meterRegistry.find("wikiagent.task.duration.seconds")
                 .tag("taskType", "OBS_METRICS").tag("result", "completed").timer().count())

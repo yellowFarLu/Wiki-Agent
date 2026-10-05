@@ -1,6 +1,7 @@
 package com.wikiagent.infrastructure.persistence;
 
 import com.wikiagent.application.knowledge.MetricsAggregationJob;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -39,6 +40,12 @@ class RagAnswerEvalDaoIT {
 
     @Autowired
     private MetricsAggregationJob aggregationJob;
+
+    @AfterEach
+    void clean() {
+        // 三个测试方法共享同一个 H2 文件库，全局 count/聚合必须方法间隔离
+        dao.deleteAll();
+    }
 
     private static RagAnswerEvalEntity row(String sessionId, String answer, Integer f, Integer r, String status) {
         RagAnswerEvalEntity e = new RagAnswerEvalEntity();
@@ -100,7 +107,7 @@ class RagAnswerEvalDaoIT {
         MetricsAggregationJob.AnswerEvalSummary eval = snapshot.answerEval();
 
         assertThat(eval).isNotNull();
-        assertThat(eval.judgedCount()).isEqualTo(4);
+        assertThat(eval.judgedCount()).isEqualTo(3);
         assertThat(eval.pendingCount()).isEqualTo(1);
         assertThat(eval.failedCount()).isZero();
         // 忠实度：f≠null 2 行（1 通过 / 0 不通过）→ 0.5

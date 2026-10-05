@@ -18,12 +18,13 @@
 
 | 指标 | 业界对应 | 数据来源 | 计算公式 | 状态 |
 |---|---|---|---|---|
-| **answerAccuracy 答案准确率** | RAGAS answer correctness 的线上近似 | `rag_answer_eval`（LLM-as-judge） | Σ(faithfulness=1 ∧ relevance=1) / Σ(两维均≠null) | 本方案新增 |
+| **answerAccuracy 答案准确率** | RAGAS answer correctness 的线上近似（严格与门通过率，非 statement 级 F1） | `rag_answer_eval`（LLM-as-judge） | Σ(faithfulness=1 ∧ relevance=1) / Σ(两维均≠null) | 本方案新增 |
 | **faithfulnessRate 忠实度** | RAGAS faithfulness | `rag_answer_eval` | Σ(faithfulness=1) / Σ(faithfulness≠null) | 本方案新增 |
 | **relevanceRate 相关性** | RAGAS answer relevancy | `rag_answer_eval` | Σ(relevance=1) / Σ(relevance≠null) | 本方案新增 |
-| usefulnessRate 有用率 | 用户反馈信号 | `kb_feedback` | USEFUL / (USEFUL+USELESS) | 已有，不变 |
-| recallRate | —（实为**引用率**：进入生成上下文的来源均同时记 RETRIEVED+CITED） | `metric_event` | CITED / RETRIEVED | 已有，不变 |
-| citationCorrectRate / retrievalHitRate 等 | 离线黄金集评测（RAGAS context recall 等） | eval 子系统（`EvalRunner` 七项指标） | 见离线评测报告 | 已有，不重复建设 |
+| **precisionRate 带标签检索精确率** | 检索精确率（precision = 相关检索项 / 已标注检索项），与离线 retrievalHitRate 同口径 | `kb_feedback`（chunk 级） | 近 30 天 chunk 级 USEFUL / (USEFUL+USELESS)；无标签不进分母；分母 0 → null | 2026-10-05 重定义 |
+| ~~recallRate 召回率~~ | 业界召回 = 检索到的相关项 / 语料全部相关项，需 golden set 全量标注 | **线上不输出**（本管道"召回即引用"，CITED/RETRIEVED 恒等于 1.0，零信息恒真式，2026-10-05 移除）；召回率仅由离线评测子系统基于黄金集计算（RAGAS context recall 口径，见 eval-baseline.md） | — | 已移除 |
+| ~~usefulnessRate 有用率~~ | 用户反馈信号 | `kb_feedback` | 2026-10-05 移除（分子分母易被挑战），有用/无用仅保留原始计数（近 30 天窗口）；替代为"疑似无用知识"治理清单 | 已移除 |
+| citationCorrectRate / retrievalHitRate 等 | 离线黄金集评测（RAGAS context recall 等） | eval 子系统（`EvalRunner` 七项指标 + RAGAS 官方指标族：2026-10-06 引入 ragas==0.4.3，CI 夜间 `ragas-eval` job，黄金集 `eval/ragas/golden-ragas.jsonl`，口径与基线见 eval-baseline.md §6） | 见离线评测报告 | 已有，不重复建设 |
 
 ### 2.1 数据链路
 

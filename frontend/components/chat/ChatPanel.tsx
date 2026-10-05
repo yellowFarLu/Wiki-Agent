@@ -250,7 +250,7 @@ export default function ChatPanel() {
     setSending(false);
   };
 
-  /** 👍/👎 会话级反馈：写入 kb_feedback，是治理看板有用率与可观测反馈审计的数据源。 */
+  /** 👍/👎 会话级反馈：写入 kb_feedback，是治理看板"疑似无用知识"判定与可观测反馈审计的数据源。 */
   const sendFeedback = async (index: number, type: 'USEFUL' | 'USELESS') => {
     const target = messages[index];
     const sid = target?.sid ?? sessionIdRef.current;

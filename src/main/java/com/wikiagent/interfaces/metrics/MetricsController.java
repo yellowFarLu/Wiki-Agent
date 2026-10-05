@@ -3,7 +3,8 @@ package com.wikiagent.interfaces.metrics;
 import com.wikiagent.application.knowledge.MetricsAggregationJob;
 import com.wikiagent.application.knowledge.MetricsAggregationJob.MetricsSnapshot;
 import com.wikiagent.application.knowledge.RagAnswerJudgeService;
-import com.wikiagent.infrastructure.persistence.KbFeedbackEntity;
+import com.wikiagent.application.knowledge.RagasEvalExecutor;
+import com.wikiagent.application.knowledge.StaleScore;
 import com.wikiagent.infrastructure.persistence.KbFeedbackJpaDao;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataEntity;
 import com.wikiagent.infrastructure.persistence.KnowledgeMetadataJpaDao;
@@ -11,9 +12,14 @@ import com.wikiagent.infrastructure.persistence.MetricEventEntity;
 import com.wikiagent.infrastructure.persistence.MetricEventJpaDao;
 import com.wikiagent.infrastructure.persistence.RagAnswerEvalEntity;
 import com.wikiagent.infrastructure.persistence.RagAnswerEvalJpaDao;
+import com.wikiagent.infrastructure.persistence.RagasEvalRunEntity;
+import com.wikiagent.infrastructure.persistence.RagasEvalRunJpaDao;
+import com.wikiagent.infrastructure.persistence.RagasEvalSampleEntity;
+import com.wikiagent.infrastructure.persistence.RagasEvalSampleJpaDao;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
@@ -22,16 +28,21 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * v4 §6.6.2.4 知识指标看板 API。
  * <p>
- * GET /api/metrics/aggregation    — 定时聚合快照（含 RAG 回答评测三率 answerEval）
- * GET /api/metrics/dashboard      — 知识看板概览（召回率、精确率、有用率、无用率、使用频率、过期知识）
+ * GET /api/metrics/aggregation    — 定时聚合快照（含疑似无用知识、RAG 回答评测三率 answerEval）
+ * GET /api/metrics/dashboard      — 知识看板概览（带标签检索精确率、使用频率、过期知识、有用/无用原始计数；
+ *                                   召回率线上不输出，仅离线 golden-set 评测可算）
  * GET /api/metrics/knowledge      — 知识元数据列表（含创建时间、创建者、创建身份）
  * GET /api/metrics/chunk/{chunkId} — 单条知识 chunk 的指标明细
  * GET /api/metrics/answer-eval/samples — 最近 RAG 评测样本明细
  * POST /api/metrics/answer-eval/judge  — 手动触发一批 LLM 评判
+ * POST /api/metrics/ragas/run          — 触发一次 RAGAS 离线评测（异步，202/409）
+ * GET /api/metrics/ragas/runs          — RAGAS 历史执行列表（最新在前）
+ * GET /api/metrics/ragas/runs/{runId}  — 单次执行详情 + 评测用例集
  */
 @RestController
 @RequestMapping("/api/metrics")
@@ -43,21 +54,36 @@ public class MetricsController {
     private final MetricEventJpaDao metricEventDao;
     private final KbFeedbackJpaDao feedbackDao;
     private final RagAnswerEvalJpaDao answerEvalDao;
+    private final RagasEvalRunJpaDao ragasRunDao;
+    private final RagasEvalSampleJpaDao ragasSampleDao;
     private final MetricsAggregationJob aggregationJob;
     private final ObjectProvider<RagAnswerJudgeService> judgeServiceProvider;
+    private final ObjectProvider<RagasEvalExecutor> ragasExecutorProvider;
+    private final long tauTimeDays;
+    private final double staleThreshold;
 
     public MetricsController(KnowledgeMetadataJpaDao metadataDao,
                              MetricEventJpaDao metricEventDao,
                              KbFeedbackJpaDao feedbackDao,
                              RagAnswerEvalJpaDao answerEvalDao,
+                             RagasEvalRunJpaDao ragasRunDao,
+                             RagasEvalSampleJpaDao ragasSampleDao,
                              MetricsAggregationJob aggregationJob,
-                             ObjectProvider<RagAnswerJudgeService> judgeServiceProvider) {
+                             ObjectProvider<RagAnswerJudgeService> judgeServiceProvider,
+                             ObjectProvider<RagasEvalExecutor> ragasExecutorProvider,
+                             @Value("${wikiagent.metrics.tau-time-days:180}") long tauTimeDays,
+                             @Value("${wikiagent.metrics.stale-threshold:0.3}") double staleThreshold) {
         this.metadataDao = metadataDao;
         this.metricEventDao = metricEventDao;
         this.feedbackDao = feedbackDao;
         this.answerEvalDao = answerEvalDao;
+        this.ragasRunDao = ragasRunDao;
+        this.ragasSampleDao = ragasSampleDao;
         this.aggregationJob = aggregationJob;
         this.judgeServiceProvider = judgeServiceProvider;
+        this.ragasExecutorProvider = ragasExecutorProvider;
+        this.tauTimeDays = tauTimeDays;
+        this.staleThreshold = staleThreshold;
     }
 
     /**
@@ -78,38 +104,52 @@ public class MetricsController {
     }
 
     /**
-     * 知识看板概览。
+     * 知识看板概览（口径与 MetricsAggregationJob 一致，业界标准对齐）：
+     * <ul>
+     *   <li>precisionRate＝带标签检索精确率：近 30 天 chunk 级 USEFUL/(USEFUL+USELESS)；
+     *       无反馈标签的检索不进分母；分母为 0 → null → 前端显示"-"，不显示 0%。</li>
+     *   <li>召回率不输出：业界召回需要全量相关性标注（golden set），线上无法诚实计算
+     *       （本管道"召回即引用"，CITED/RETRIEVED 恒等于 1.0，零信息），仅离线评测可算。</li>
+     *   <li>有用/无用原始计数与检索计数同为近 30 天窗口；过期知识与聚合作业同一 staleScore 公式。</li>
+     * </ul>
      */
     @GetMapping("/dashboard")
     public ResponseEntity<Map<String, Object>> dashboard() {
         List<KnowledgeMetadataEntity> allKnowledge = metadataDao.findAllActive();
         long totalKnowledge = allKnowledge.size();
 
-        // 最近 30 天的指标事件
+        // 最近 30 天的指标事件与反馈（同一窗口，避免跨窗口并排误读）
         Instant since = Instant.now().minus(30, ChronoUnit.DAYS);
         List<MetricEventEntity> recentEvents = metricEventDao.findSince(since);
 
-        // 统计
         long totalRetrievals = recentEvents.stream()
                 .filter(e -> "RETRIEVED".equals(e.getEventType())).count();
         long totalCitations = recentEvents.stream()
                 .filter(e -> "CITED".equals(e.getEventType())).count();
-        long usefulCount = feedbackDao.findAll().stream()
-                .filter(f -> "USEFUL".equals(f.getFeedbackType())).count();
-        long uselessCount = feedbackDao.findAll().stream()
-                .filter(f -> "USELESS".equals(f.getFeedbackType())).count();
+        Map<String, Long> feedbackCounts = toCountMap(feedbackDao.countByCreatedAtAfterGroupByType(since));
+        long usefulCount = feedbackCounts.getOrDefault("USEFUL", 0L);
+        long uselessCount = feedbackCounts.getOrDefault("USELESS", 0L);
 
-        double usefulnessRate = (usefulCount + uselessCount) > 0
-                ? (double) usefulCount / (usefulCount + uselessCount) : 0.0;
+        // 带标签检索精确率：会话级反馈（chunkId=null）标注整条答案而非检索项相关性，不计入
+        Map<String, Long> labeled = toCountMap(feedbackDao.countChunkLevelByCreatedAtAfterGroupByType(since));
+        long labeledUseful = labeled.getOrDefault("USEFUL", 0L);
+        long labeledTotal = labeledUseful + labeled.getOrDefault("USELESS", 0L);
+        Double precisionRate = labeledTotal > 0
+                ? Math.round((double) labeledUseful / labeledTotal * 1000.0) / 1000.0 : null;
 
-        // 简化的召回率/精确率计算（实际需要更多数据）
-        double recallRate = totalRetrievals > 0 ? (double) totalCitations / totalRetrievals : 0.0;
-        double precisionRate = totalRetrievals > 0 ? Math.min(1.0, (double) usefulCount / Math.max(1, totalRetrievals)) : 0.0;
-
-        // 过期知识检测（stale_score < 0.3）
-        Instant staleCutoff = Instant.now().minus(180, ChronoUnit.DAYS);
+        // 疑似过期知识：与 MetricsAggregationJob 同一 staleScore 公式与阈值
+        Instant now = Instant.now();
+        Map<String, Long> retrievalCountByChunk = recentEvents.stream()
+                .filter(e -> "RETRIEVED".equals(e.getEventType()) && e.getChunkId() != null)
+                .collect(Collectors.groupingBy(MetricEventEntity::getChunkId, Collectors.counting()));
         long staleCount = allKnowledge.stream()
-                .filter(k -> k.getCreatedAt() != null && k.getCreatedAt().isBefore(staleCutoff))
+                .filter(k -> {
+                    long ageDays = k.getCreatedAt() == null
+                            ? Long.MAX_VALUE
+                            : java.time.Duration.between(k.getCreatedAt(), now).toDays();
+                    return StaleScore.score(ageDays,
+                            retrievalCountByChunk.getOrDefault(k.getChunkId(), 0L), tauTimeDays) < staleThreshold;
+                })
                 .count();
 
         Map<String, Object> dashboard = new LinkedHashMap<>();
@@ -118,15 +158,20 @@ public class MetricsController {
         dashboard.put("totalCitations", totalCitations);
         dashboard.put("usefulCount", usefulCount);
         dashboard.put("uselessCount", uselessCount);
-        dashboard.put("usefulnessRate", usefulnessRate);
-        dashboard.put("uselessnessRate", 1.0 - usefulnessRate);
-        dashboard.put("recallRate", recallRate);
         dashboard.put("precisionRate", precisionRate);
         dashboard.put("staleKnowledgeCount", staleCount);
-        dashboard.put("staleThreshold", 0.3);
+        dashboard.put("staleThreshold", staleThreshold);
         dashboard.put("scanPeriod", "30d");
 
         return ResponseEntity.ok(dashboard);
+    }
+
+    private static Map<String, Long> toCountMap(List<Object[]> rows) {
+        Map<String, Long> counts = new HashMap<>();
+        for (Object[] row : rows) {
+            counts.merge((String) row[0], ((Number) row[1]).longValue(), Long::sum);
+        }
+        return counts;
     }
 
     /**
@@ -169,18 +214,19 @@ public class MetricsController {
                 () -> metrics.put("metadata", null)
         );
 
-        // 指标事件
+        // 指标事件（检索/引用）
         List<MetricEventEntity> events = metricEventDao.findByChunkId(chunkId);
         long retrievals = events.stream().filter(e -> "RETRIEVED".equals(e.getEventType())).count();
         long citations = events.stream().filter(e -> "CITED".equals(e.getEventType())).count();
-        long useful = events.stream().filter(e -> "FEEDBACK_USEFUL".equals(e.getEventType())).count();
-        long useless = events.stream().filter(e -> "FEEDBACK_USELESS".equals(e.getEventType())).count();
+        // 有用/无用口径以 kb_feedback 表为准（项目规约），不从 metric_event 反馈事件计数
+        Map<String, Long> feedbackCounts = toCountMap(feedbackDao.countByChunkIdGroupByType(chunkId));
+        long useful = feedbackCounts.getOrDefault("USEFUL", 0L);
+        long useless = feedbackCounts.getOrDefault("USELESS", 0L);
 
         metrics.put("retrievals", retrievals);
         metrics.put("citations", citations);
         metrics.put("usefulCount", useful);
         metrics.put("uselessCount", useless);
-        metrics.put("usefulnessRate", (useful + useless) > 0 ? (double) useful / (useful + useless) : 0.0);
         metrics.put("lastUsedAt", events.isEmpty() ? null : events.get(events.size() - 1).getCreatedAt());
 
         return ResponseEntity.ok(metrics);
@@ -243,5 +289,47 @@ public class MetricsController {
         }
         String oneLine = s.replace('\n', ' ').replace('\r', ' ').strip();
         return oneLine.length() <= max ? oneLine : oneLine.substring(0, max);
+    }
+
+    // ================= RAGAS 离线评测 =================
+
+    /**
+     * 触发一次 RAGAS 评测：执行器未启用 → 409；预检/单飞失败 → 409；
+     * 已受理 → 202 + runId，前端轮询 detail 直到终态。
+     */
+    @PostMapping("/ragas/run")
+    public ResponseEntity<Map<String, Object>> runRagas() {
+        RagasEvalExecutor executor = ragasExecutorProvider.getIfAvailable();
+        if (executor == null) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("runId", null);
+            body.put("message", "RAGAS 评测未启用（wikiagent.ragas.enabled=false）");
+            return ResponseEntity.status(409).body(body);
+        }
+        RagasEvalExecutor.StartOutcome outcome = executor.start();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("runId", outcome.runId());
+        body.put("message", outcome.message());
+        return ResponseEntity.status(outcome.code()).body(body);
+    }
+
+    /** RAGAS 历史执行列表（最新在前，最多 100 条）。 */
+    @GetMapping("/ragas/runs")
+    public ResponseEntity<List<RagasEvalRunEntity>> ragasRuns() {
+        return ResponseEntity.ok(ragasRunDao.findTop100ByOrderByCreatedAtDesc());
+    }
+
+    /** 单次执行详情：run + 完整评测用例集；runId 不存在 → 404。 */
+    @GetMapping("/ragas/runs/{runId}")
+    public ResponseEntity<Map<String, Object>> ragasRunDetail(@PathVariable String runId) {
+        RagasEvalRunEntity run = ragasRunDao.findByRunId(runId).orElse(null);
+        if (run == null) {
+            return ResponseEntity.notFound().build();
+        }
+        List<RagasEvalSampleEntity> samples = ragasSampleDao.findByRunIdOrderByIdAsc(runId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("run", run);
+        body.put("samples", samples);
+        return ResponseEntity.ok(body);
     }
 }

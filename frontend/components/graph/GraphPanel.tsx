@@ -94,6 +94,14 @@ export default function GraphPanel() {
     const centerX = width / 2;
     const centerY = height / 2;
     const radius = Math.min(width, height) * 0.35;
+    const matchedIds = new Set(result.matchedEntities.map((m) => m.id));
+    const nodeRadius = (id: string) => (matchedIds.has(id) ? 20 : 14);
+
+    // 只保留两端节点都在图中的边
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const visibleEdges = edges.filter(
+      (e) => nodeIds.has(e.sourceEntityId) && nodeIds.has(e.targetEntityId),
+    );
 
     // 节点位置初始化（圆形布局）
     const positions = new Map<string, { x: number; y: number }>();
@@ -105,10 +113,12 @@ export default function GraphPanel() {
       });
     });
 
-    // 迭代布局（简化的力导向）
-    for (let iter = 0; iter < 50; iter++) {
-      // 斥力
-      const repulsion = 2000;
+    // 迭代布局（斥力对称、弹簧朝向理想边长、边界钳制防出画布）
+    const pad = 40;
+    const idealLen = 120;
+    for (let iter = 0; iter < 150; iter++) {
+      // 斥力（两端对称受力）
+      const repulsion = 4000;
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = positions.get(nodes[i].id)!;
@@ -116,25 +126,23 @@ export default function GraphPanel() {
           const dx = a.x - b.x;
           const dy = a.y - b.y;
           const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          const force = repulsion / (dist * dist);
+          const force = (repulsion / (dist * dist)) * 0.5;
           const fx = (dx / dist) * force;
           const fy = (dy / dist) * force;
-          a.x += fx * 0.01;
-          a.y += fy * 0.01;
+          a.x += fx;
+          a.y += fy;
           b.x -= fx;
           b.y -= fy;
         }
       }
-      // 引力（边）
-      const attraction = 0.01;
-      for (const e of edges) {
-        const a = positions.get(e.sourceEntityId);
-        const b = positions.get(e.targetEntityId);
-        if (!a || !b) continue;
+      // 弹簧引力（边）：朝理想边长收放
+      for (const e of visibleEdges) {
+        const a = positions.get(e.sourceEntityId)!;
+        const b = positions.get(e.targetEntityId)!;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const force = dist * attraction;
+        const force = (dist - idealLen) * 0.02;
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
         a.x += fx;
@@ -142,26 +150,68 @@ export default function GraphPanel() {
         b.x -= fx;
         b.y -= fy;
       }
-      // 向心力
+      // 向心力 + 边界钳制
       positions.forEach((pos) => {
-        pos.x += (centerX - pos.x) * 0.01;
-        pos.y += (centerY - pos.y) * 0.01;
+        pos.x += (centerX - pos.x) * 0.005;
+        pos.y += (centerY - pos.y) * 0.005;
+        pos.x = Math.min(Math.max(pos.x, pad), width - pad);
+        pos.y = Math.min(Math.max(pos.y, pad), height - pad);
       });
     }
 
     // 渲染
     ctx.clearRect(0, 0, width, height);
-    // 边
-    ctx.strokeStyle = '#d9d9d9';
-    ctx.lineWidth = 1;
-    for (const e of edges) {
-      const a = positions.get(e.sourceEntityId);
-      const b = positions.get(e.targetEntityId);
-      if (!a || !b) continue;
+    // 边（含方向箭头 + 关系类型标注）；同一对节点的多边标注交替上下偏移
+    const pairCount = new Map<string, number>();
+    for (const e of visibleEdges) {
+      const a = positions.get(e.sourceEntityId)!;
+      const b = positions.get(e.targetEntityId)!;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const ux = dx / dist;
+      const uy = dy / dist;
+      // 连线（端点收进节点圆内，避免穿过圆心）
+      const sx = a.x + ux * nodeRadius(e.sourceEntityId);
+      const sy = a.y + uy * nodeRadius(e.sourceEntityId);
+      const tx = b.x - ux * (nodeRadius(e.targetEntityId) + 6);
+      const ty = b.y - uy * (nodeRadius(e.targetEntityId) + 6);
       ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(tx, ty);
+      ctx.strokeStyle = '#8c8c8c';
+      ctx.lineWidth = 1.5;
       ctx.stroke();
+      // 箭头
+      const arrowLen = 7;
+      const angle = Math.atan2(uy, ux);
+      ctx.beginPath();
+      ctx.moveTo(tx + ux * 6, ty + uy * 6);
+      ctx.lineTo(
+        tx + ux * 6 - arrowLen * Math.cos(angle - Math.PI / 6),
+        ty + uy * 6 - arrowLen * Math.sin(angle - Math.PI / 6),
+      );
+      ctx.lineTo(
+        tx + ux * 6 - arrowLen * Math.cos(angle + Math.PI / 6),
+        ty + uy * 6 - arrowLen * Math.sin(angle + Math.PI / 6),
+      );
+      ctx.closePath();
+      ctx.fillStyle = '#8c8c8c';
+      ctx.fill();
+      // 关系类型标注（白描边保证在线上可读）
+      const pairKey = [e.sourceEntityId, e.targetEntityId].sort().join('|');
+      const k = pairCount.get(pairKey) ?? 0;
+      pairCount.set(pairKey, k + 1);
+      const off = (k % 2 === 0 ? -1 : 1) * 10;
+      const mx = (sx + tx) / 2 - uy * off;
+      const my = (sy + ty) / 2 + ux * off;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#fff';
+      ctx.strokeText(e.relationType, mx, my);
+      ctx.fillStyle = '#595959';
+      ctx.fillText(e.relationType, mx, my);
     }
     // 节点
     for (const n of nodes) {

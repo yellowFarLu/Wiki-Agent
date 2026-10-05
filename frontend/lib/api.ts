@@ -24,6 +24,8 @@ import type {
   LineageView,
   MetricsAggregation,
   ObservabilityDashboard,
+  RagasRun,
+  RagasRunDetail,
   ReviewCase,
   ReviewCaseResolveRequest,
   Source,
@@ -283,6 +285,24 @@ export function triggerAnswerEvalJudge(): Promise<{ enabled: boolean; judged?: n
     '/api/metrics/answer-eval/judge',
     { method: 'POST' },
   );
+}
+
+// ============ RAGAS 离线评测 ============
+/** RAGAS 历史执行列表（最新在前）。 */
+export function getRagasRuns(): Promise<RagasRun[]> {
+  return request<RagasRun[]>('/api/metrics/ragas/runs');
+}
+
+/** 单次执行详情（run + 评测用例集）。 */
+export function getRagasRunDetail(runId: string): Promise<RagasRunDetail> {
+  return request<RagasRunDetail>(`/api/metrics/ragas/runs/${encodeURIComponent(runId)}`);
+}
+
+/** 触发一次 RAGAS 评测（202 已受理；预检/单飞失败后端返回 409，由调用方 catch 提示）。 */
+export function triggerRagasRun(): Promise<{ runId: string | null; message: string }> {
+  return request<{ runId: string | null; message: string }>('/api/metrics/ragas/run', {
+    method: 'POST',
+  });
 }
 
 // ============ 统一可观测 ============
