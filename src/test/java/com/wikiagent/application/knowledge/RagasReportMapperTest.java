@@ -43,6 +43,9 @@ class RagasReportMapperTest {
               "samples": [
                 {
                   "id": "s1", "domain": "pms",
+                  "source": "synthetic", "difficulty": "multi_hop",
+                  "reviewStatus": "approved", "answerOrigin": "reference-proxy",
+                  "tags": ["noise:misspelled", "distribution:multi-hop"],
                   "question": "物业缴费账单在哪里开具发票",
                   "contexts": ["业主完成物业缴费账单后，可在线申请开具发票。"],
                   "answer": "可在线申请开具发票。",
@@ -114,5 +117,27 @@ class RagasReportMapperTest {
         RagasEvalSampleEntity s2 = samples.get(1);
         assertThat(s2.getFactualCorrectness()).isNull();
         assertThat(s2.getSemanticSimilarity()).isEqualTo(0.78);
+    }
+
+    @Test
+    void provenance字段与tags数组完整映射() throws Exception {
+        RagasEvalSampleEntity s1 = mapper.toSamples("r", objectMapper.readTree(REPORT)).get(0);
+
+        assertThat(s1.getSource()).isEqualTo("synthetic");
+        assertThat(s1.getDifficulty()).isEqualTo("multi_hop");
+        assertThat(s1.getReviewStatus()).isEqualTo("approved");
+        assertThat(s1.getAnswerOrigin()).isEqualTo("reference-proxy");
+        assertThat(s1.getTags()).isEqualTo("noise:misspelled,distribution:multi-hop");
+    }
+
+    @Test
+    void 旧报告缺provenance时回填人工基线默认值且tags为null() throws Exception {
+        RagasEvalSampleEntity s2 = mapper.toSamples("r", objectMapper.readTree(REPORT)).get(1);
+
+        assertThat(s2.getSource()).isEqualTo("seed-manual");
+        assertThat(s2.getDifficulty()).isEqualTo("simple");
+        assertThat(s2.getReviewStatus()).isEqualTo("approved");
+        assertThat(s2.getAnswerOrigin()).isEqualTo("manual");
+        assertThat(s2.getTags()).isNull();
     }
 }

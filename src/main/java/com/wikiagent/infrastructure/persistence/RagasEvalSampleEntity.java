@@ -30,6 +30,26 @@ public class RagasEvalSampleEntity {
     @Column(name = "domain_tag", length = 64)
     private String domainTag;
 
+    /** 数据来源：seed-manual / synthetic / production / expert（V22，三阶段流水线）。 */
+    @Column(length = 32)
+    private String source;
+
+    /** 难度：simple / reasoning / multi_hop / boundary（V22）。 */
+    @Column(length = 32)
+    private String difficulty;
+
+    /** 审核状态：approved（进基线）/ pending（候选预览评分，不进主聚合）（V22）。 */
+    @Column(name = "review_status", length = 16)
+    private String reviewStatus;
+
+    /** 答案来源：manual / reference-proxy（合成代理）/ production（线上真实回答）（V22）。 */
+    @Column(name = "answer_origin", length = 32)
+    private String answerOrigin;
+
+    /** 标签逗号分隔（如 noise:misspelled、hard-negative:faithfulness）（V22）。 */
+    @Column(length = 512)
+    private String tags;
+
     @Column(nullable = false, columnDefinition = "TEXT")
     private String question;
 
@@ -76,6 +96,16 @@ public class RagasEvalSampleEntity {
     public void setSampleId(String sampleId) { this.sampleId = sampleId; }
     public String getDomainTag() { return domainTag; }
     public void setDomainTag(String domainTag) { this.domainTag = domainTag; }
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+    public String getDifficulty() { return difficulty; }
+    public void setDifficulty(String difficulty) { this.difficulty = difficulty; }
+    public String getReviewStatus() { return reviewStatus; }
+    public void setReviewStatus(String reviewStatus) { this.reviewStatus = reviewStatus; }
+    public String getAnswerOrigin() { return answerOrigin; }
+    public void setAnswerOrigin(String answerOrigin) { this.answerOrigin = answerOrigin; }
+    public String getTags() { return tags; }
+    public void setTags(String tags) { this.tags = tags; }
     public String getQuestion() { return question; }
     public void setQuestion(String question) { this.question = question; }
     public String getContexts() { return contexts; }

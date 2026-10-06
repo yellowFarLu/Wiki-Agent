@@ -305,6 +305,34 @@ export function triggerRagasRun(): Promise<{ runId: string | null; message: stri
   });
 }
 
+/**
+ * 阶段二：导出近 N 天生产日志评测候选（NDJSON 附件，reviewStatus=pending、
+ * contexts/reference 留空待专家补标）。响应非 JSON，单独处理文本下载。
+ */
+export async function exportProductionCandidates(
+  days = 30,
+  limit = 50,
+): Promise<{ filename: string; text: string }> {
+  const res = await fetch(
+    `/api/metrics/ragas/dataset/export-production?days=${days}&limit=${limit}`,
+    { method: 'POST', headers: authHeaders() },
+  );
+  if (!res.ok) {
+    let message = `导出失败（HTTP ${res.status}）`;
+    try {
+      const body = (await res.json()) as BackendErrorBody;
+      if (body && typeof body.message === 'string' && body.message) message = body.message;
+    } catch {
+      // 保留默认消息
+    }
+    throw new Error(message);
+  }
+  const text = await res.text();
+  const disposition = res.headers.get('Content-Disposition') ?? '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  return { filename: match?.[1] ?? 'candidates-production.jsonl', text };
+}
+
 // ============ 统一可观测 ============
 export function getObservabilityDashboard(): Promise<ObservabilityDashboard> {
   return request<ObservabilityDashboard>('/api/observability/dashboard');

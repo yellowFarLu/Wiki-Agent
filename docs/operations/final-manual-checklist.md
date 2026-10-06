@@ -19,14 +19,14 @@
 
 ```bash
 # 1) 中间件（可选，缺省走降级）
-docker compose up -d mysql redis rocketmq-namesrv milvus
+docker compose up -d mysql redis rmqnamesrv milvus
 
 # 2) 后端（dev profile，H2 文件库零依赖）
 SPRING_PROFILES_ACTIVE=dev ./run.sh   # 或 mvn spring-boot:run
-curl -s localhost:8080/api/health
+curl -s localhost:8090/api/health
 
 # 3) 前端（波4 G）
-cd frontend && npm ci && npm run dev   # http://localhost:3000，/api 代理到 8080
+cd frontend && npm ci && npm run dev   # http://localhost:3000，/api 代理到 8090
 
 # 4) 全栈 compose（可选）
 docker compose up -d                   # nginx :80 → / 前端、/api 后端 sticky
@@ -42,7 +42,7 @@ docker compose up -d                   # nginx :80 → / 前端、/api 后端 st
 | 规则/复核(D) | 复核案件 通过/驳回/编辑 三动作 | 处置成功提示 + field_version 新行 + task_event |
 | RAG/对话(E) | 对话页提问带知识库命中问题 | stage 进度 → sources → delta 流式 → 引用角标可点开页码片段 |
 | Agent 治理(F) | 越权身份调用受控工具 | 拒绝 + audit_log TOOL_DENIED |
-| 可观测(I) | `curl localhost:8080/actuator/prometheus` | 含 `wikiagent_*` 任务积压/模型调用/熔断指标 |
+| 可观测(I) | `curl localhost:8090/actuator/prometheus` | 含 `wikiagent_*` 任务积压/模型调用/熔断指标 |
 | 安全(J) | 无 X-User-Id 或越权 domain 访问 | 401/429/越权零命中；审计可查 |
 | 评测(H) | `mvn -B test -Peval` | EvalReport JSON 产出（无 key 可跑录制固件） |
 | 前端 e2e(G) | `cd frontend && npm run test:e2e`（CI 设 PW_CHROMIUM=1） | mock 全链路 2 passed；真实后端 `E2E_REAL_BACKEND=1` 冒烟 |

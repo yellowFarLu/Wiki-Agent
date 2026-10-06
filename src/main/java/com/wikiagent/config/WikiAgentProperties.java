@@ -59,10 +59,14 @@ public record WikiAgentProperties(Milvus milvus, Retrieve retrieve, Ingest inges
             int parentCharBudget) {
     }
 
+    /**
+     * 入库切分配置。尺寸口径为 token（{@code QwenStyleTokenEstimator} 离线估算，中文约 1 字 = 1 token），
+     * 不再是字符数；选型依据见 docs/ingestion.md「2.1 切分算法与尺寸选型」。
+     */
     public record Ingest(
-            int parentChars,
+            int parentSize,
             int parentOverlap,
-            int childChars,
+            int childSize,
             int childOverlap,
             int embeddingBatch) {
     }

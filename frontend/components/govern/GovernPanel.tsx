@@ -14,7 +14,7 @@ import {
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { getAnswerEvalSamples, getMetricsAggregation, getRagasRuns, getRagasRunDetail, triggerRagasRun } from '@/lib/api';
+import { exportProductionCandidates, getAnswerEvalSamples, getMetricsAggregation, getRagasRuns, getRagasRunDetail, triggerRagasRun } from '@/lib/api';
 import { formatDateTime } from '@/lib/datetime';
 import type {
   AnswerEvalSampleItem,
@@ -40,6 +40,64 @@ function scoreTag(v: number | null | undefined) {
   return <Tag color={color}>{v.toFixed(3)}</Tag>;
 }
 
+/** 三阶段数据流水线来源标签（合成→生产日志→专家审核，seed-manual 为初始人工基线）。 */
+const SOURCE_META: Record<string, { label: string; color: string }> = {
+  'seed-manual': { label: '人工基线', color: 'blue' },
+  synthetic: { label: '合成', color: 'purple' },
+  production: { label: '生产日志', color: 'cyan' },
+  expert: { label: '专家审核', color: 'gold' },
+};
+
+function sourceTag(v: string | null | undefined) {
+  if (!v) return <Tag>未知</Tag>;
+  const meta = SOURCE_META[v] ?? { label: v, color: 'default' };
+  return <Tag color={meta.color}>{meta.label}</Tag>;
+}
+
+function reviewStatusTag(v: string | null | undefined) {
+  if (v === 'approved') return <Tag color="green">已审核</Tag>;
+  if (v === 'rejected') return <Tag color="red">已驳回</Tag>;
+  return <Tag color="orange">待审核</Tag>;
+}
+
+const DIFFICULTY_LABEL: Record<string, string> = {
+  simple: '事实',
+  reasoning: '推理',
+  multi_hop: '多跳',
+  boundary: '边界',
+};
+
+function difficultyTag(v: string | null | undefined) {
+  if (!v) return null;
+  return <Tag>{DIFFICULTY_LABEL[v] ?? v}</Tag>;
+}
+
+/** 非空均值（null 不入分母，与评测脚本口径一致）；全 null → null 显示 "-"。 */
+function avgNonNull(values: Array<number | null | undefined>): number | null {
+  const xs = values.filter((v): v is number => v !== null && v !== undefined && !Number.isNaN(v));
+  if (xs.length === 0) return null;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+/** 按 source 分组聚合样本评分（前端实时分组，null 不入均值）。 */
+function summarizeBySource(samples: RagasSample[]) {
+  const groups = new Map<string, RagasSample[]>();
+  for (const s of samples) {
+    const key = s.source ?? 'seed-manual';
+    const list = groups.get(key);
+    if (list) list.push(s);
+    else groups.set(key, [s]);
+  }
+  return Array.from(groups.entries()).map(([source, list]) => ({
+    source,
+    n: list.length,
+    faithfulness: avgNonNull(list.map((s) => s.faithfulness)),
+    answerRelevancy: avgNonNull(list.map((s) => s.answerRelevancy)),
+    contextPrecision: avgNonNull(list.map((s) => s.contextPrecision)),
+    contextRecall: avgNonNull(list.map((s) => s.contextRecall)),
+  }));
+}
+
 /** RAGAS 用例展开行：答案/参考/contexts/补充指标/评分错误，JSON 解析失败如实兜底。 */
 function renderRagasSampleExpand(s: RagasSample) {
   let contextList: string[] = [];
@@ -58,10 +116,18 @@ function renderRagasSampleExpand(s: RagasSample) {
   } catch {
     errorMap = {};
   }
+  const tagList = (s.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean);
   return (
     <div style={{ padding: '4px 8px' }}>
+      <p>
+        {sourceTag(s.source)}
+        {difficultyTag(s.difficulty)}
+        {reviewStatusTag(s.reviewStatus)}
+        {s.answerOrigin && <Tag>答案:{s.answerOrigin === 'manual' ? '人工' : s.answerOrigin === 'production' ? '生产' : '参考镜像'}</Tag>}
+        {tagList.map((t) => <Tag key={t} color="geekblue">{t}</Tag>)}
+      </p>
       <p><b>助手回答：</b>{s.answer}</p>
-      <p><b>参考答案：</b>{s.reference}</p>
+      <p><b>参考答案：</b>{s.reference || <Typography.Text type="warning">（待专家补标，该项相关指标不计入分母）</Typography.Text>}</p>
       <div><b>检索 contexts（{contextList.length}）：</b></div>
       {contextList.map((c, i) => (
         <p key={i} style={{ marginLeft: 12, color: '#555' }}>{c}</p>
@@ -91,6 +157,7 @@ function KnowledgeDashboard() {
   const [ragasRuns, setRagasRuns] = useState<RagasRun[]>([]);
   const [ragasDetail, setRagasDetail] = useState<RagasRunDetail | null>(null);
   const [ragasExecuting, setRagasExecuting] = useState(false);
+  const [exportingCandidates, setExportingCandidates] = useState(false);
 
   const load = useCallback(
     async (refresh = false) => {
@@ -167,6 +234,31 @@ function KnowledgeDashboard() {
       setRagasExecuting(false);
     }
   }, [loadRagasRuns, message]);
+
+  /**
+   * 阶段二：导出近 30 天生产日志候选并触发浏览器下载。
+   * 候选为 pending 且 contexts/reference 留空——须经 review_dataset.py 专家审核补标，
+   * 不直接进入基线（避免用生产答案反推 ground truth 污染评测）。
+   */
+  const exportProduction = useCallback(async () => {
+    setExportingCandidates(true);
+    try {
+      const { filename, text } = await exportProductionCandidates(30, 50);
+      const blob = new Blob([text], { type: 'application/x-ndjson;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      const n = text.trim() ? text.trim().split('\n').length : 0;
+      message.success(`已导出 ${n} 条生产候选（pending），请经专家审核补标后再合入基线`);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '生产候选导出失败');
+    } finally {
+      setExportingCandidates(false);
+    }
+  }, [message]);
 
   useEffect(() => {
     void load(false);
@@ -283,12 +375,30 @@ function KnowledgeDashboard() {
   // RAGAS 评测用例集表列（展开行显示答案/参考/contexts/错误）
   const ragasSampleColumns: ColumnsType<RagasSample> = [
     { title: '用例ID', dataIndex: 'sampleId', width: 200, ellipsis: true },
-    { title: '领域', dataIndex: 'domainTag', width: 130, render: (v: string | null) => v || '-' },
+    {
+      title: '来源/难度', width: 130,
+      render: (_, r) => <span>{sourceTag(r.source)}{difficultyTag(r.difficulty)}</span>,
+    },
+    {
+      title: '审核', dataIndex: 'reviewStatus', width: 90,
+      render: (v: string | null) => reviewStatusTag(v),
+    },
+    { title: '领域', dataIndex: 'domainTag', width: 110, render: (v: string | null) => v || '-' },
     { title: '问题', dataIndex: 'question' },
     { title: '忠实度', dataIndex: 'faithfulness', width: 90, render: scoreTag },
     { title: '答案相关性', dataIndex: 'answerRelevancy', width: 100, render: scoreTag },
     { title: '上下文精确率', dataIndex: 'contextPrecision', width: 110, render: scoreTag },
     { title: '上下文召回率', dataIndex: 'contextRecall', width: 110, render: scoreTag },
+  ];
+
+  // 按数据来源分组聚合列（三阶段流水线质量对比，null 不入分母）
+  const sourceSummaryColumns: ColumnsType<ReturnType<typeof summarizeBySource>[number]> = [
+    { title: '数据来源', dataIndex: 'source', width: 140, render: (v: string) => sourceTag(v) },
+    { title: '用例数', dataIndex: 'n', width: 80 },
+    { title: '忠实度', dataIndex: 'faithfulness', width: 100, render: scoreTag },
+    { title: '答案相关性', dataIndex: 'answerRelevancy', width: 110, render: scoreTag },
+    { title: '上下文精确率', dataIndex: 'contextPrecision', width: 120, render: scoreTag },
+    { title: '上下文召回率', dataIndex: 'contextRecall', width: 120, render: scoreTag },
   ];
 
   /** 1=通过 0=不通过 null=无法评判（诚实展示，不捏造）。 */
@@ -366,8 +476,16 @@ function KnowledgeDashboard() {
         >
           执行 RAGAS 评测
         </Button>
+        <Button
+          onClick={() => void exportProduction()}
+          loading={exportingCandidates}
+          style={{ marginRight: 8 }}
+        >
+          导出生产候选
+        </Button>
         <Typography.Text type="secondary">
-          每日 02:00 自动聚合（时间衰减 τ=180 天 + 30 天使用频率）；RAGAS 评测由本按钮触发，执行约 1-5 分钟
+          每日 02:00 自动聚合（时间衰减 τ=180 天 + 30 天使用频率）；RAGAS 评测由本按钮触发，执行约 1-5 分钟；
+          评测数据三阶段流水线：合成基线 → 生产日志候选（本按钮导出，专家审核补标）→ 基线滚动更新
         </Typography.Text>
       </div>
       {data?.aggregatedAt === null && (
@@ -449,6 +567,25 @@ function KnowledgeDashboard() {
               <Statistic title="上下文召回率" value={pct(ragasDetail.run.contextRecall)} />
             </Card>
           </div>
+          {(() => {
+            const summary = summarizeBySource(ragasDetail.samples);
+            if (summary.length <= 1) return null;
+            return (
+              <>
+                <Typography.Text type="secondary">
+                  按数据来源分组（三阶段流水线质量对比；未评分指标不入分母，显示“未评”）
+                </Typography.Text>
+                <Table
+                  rowKey="source"
+                  size="small"
+                  columns={sourceSummaryColumns}
+                  dataSource={summary}
+                  pagination={false}
+                  style={{ marginBottom: 12 }}
+                />
+              </>
+            );
+          })()}
           <Table<RagasSample>
             rowKey="id"
             size="small"

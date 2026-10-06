@@ -15,7 +15,7 @@ mvn -B test -Peval
 mvn test -Peval -Dtest=LiveLlmSmokeTest -Dsurefire.excludedGroups=
 
 # 或启动应用后调用接口
-curl -X POST http://localhost:8080/api/eval/run
+curl -X POST http://localhost:8090/api/eval/run
 ```
 
 运行后产出 `target/eval-report/EvalReport.json`（另留带时间戳的历史副本），
@@ -85,9 +85,10 @@ runId / 日期 / git 提交：
 ## 6. RAGAS 官方指标族（2026-10-06 引入）
 
 七项自研指标之外，系统引入业界标准 RAGAS 框架（ragas==0.4.3，Apache 2.0）做回答质量评测，
-脚本 `eval/ragas/run_ragas_eval.py`，黄金集 `eval/ragas/golden-ragas.jsonl`（12 条，
-provenance 见脚本头部：contexts 逐字取自 `retrieve-seed.json` 种子 chunk，
-answer/reference 人工撰写，**非线上流量录制**）。
+脚本 `eval/ragas/run_ragas_eval.py`，黄金集 `eval/ragas/datasets/golden-ragas.jsonl`
+（仅含 `reviewStatus=approved` 样本；初始 12 条 `source=seed-manual`，contexts 逐字取自
+`retrieve-seed.json` 种子 chunk，answer/reference 人工撰写，**非线上流量录制**）。
+评测数据按 §6.2 三阶段流水线滚动扩充，不是一次性产物。
 
 **两种执行方式（同一份脚本，结果口径一致）：**
 
@@ -108,7 +109,10 @@ answer/reference 人工撰写，**非线上流量录制**）。
 - 历史执行表：runId、状态（成功/失败/执行中）、开始时间、耗时、用例数、四项指标；
 - 选中执行详情：忠实度（忠诚度）、答案相关性、上下文精确率、上下文召回率四张指标卡
   （另含事实正确性、语义相似度，在评测用例展开行）；
-- 评测用例集：每条用例的问题/contexts/助手回答/参考答案/逐项分/错误明细。
+- 评测用例集：每条用例的来源（人工基线/合成/生产日志/专家审核）、难度、审核状态标签、
+  问题/contexts/助手回答/参考答案/逐项分/错误明细；同次执行含多个来源时展示
+  "按数据来源分组"对比表（各指标独立分母，null 不入均值）；
+- "导出生产候选"按钮：三阶段流水线阶段二入口，见 §6.2。
 
 judge 走 DashScope OpenAI 兼容端点（`qwen-plus` + `text-embedding-v3`，与线上
 同供应商，可用 `RAGAS_JUDGE_MODEL` / `RAGAS_EMBEDDING_MODEL` 覆盖）；
@@ -144,6 +148,114 @@ judge 走 DashScope OpenAI 兼容端点（`qwen-plus` + `text-embedding-v3`，�
 | semantic_similarity | 0.9564 | 待约定 | 2026-10-05 / 同上 |
 
 （执行耗时 240s，12 样本，零评分错误；judge qwen-plus，embedding text-embedding-v3。）
+
+### 6.2 评测数据三阶段流水线（2026-10-11 引入）
+
+评测数据质量决定指标意义。单一人工标注成本高、规模小；单一合成数据与真实提问分布
+差距大。系统采用业界推荐的三方式组合（合成基线 → 生产日志补真实分布 → 领域专家
+审核与边界 case 补充），评估集是随系统迭代持续更新的活文档。
+
+目录与脚本（共享 schema/IO 模块 `dataset_io.py`，纯逻辑均有 unittest 覆盖）：
+
+| 路径 | 角色 |
+| --- | --- |
+| `eval/ragas/datasets/golden-ragas.jsonl` | 基线黄金集，**只收 approved**，run_ragas_eval.py 默认只评它 |
+| `eval/ragas/datasets/candidates-synthetic.jsonl` | 阶段一合成候选（pending，按需生成） |
+| `eval/ragas/datasets/candidates-production.jsonl` | 阶段二生产日志候选（pending，按需生成，gitignore 不落库） |
+| `eval/ragas/datasets/reviewed-rejected.jsonl` | 阶段三驳回留痕（防重复提交） |
+| `corpus/synthetic-corpus.jsonl` | 阶段一合成语料（虚构业务 chunk，6 域 ×4） |
+| `generate_synthetic.py` / `review_dataset.py` | 阶段一生成器 / 阶段三审核 CLI（stats/list/approve/reject） |
+
+**阶段一：RAGAS 合成数据快速搭基线。** `generate_synthetic.py` 基于
+ragas 0.4.3 `TestsetGenerator.generate_with_chunks()`，按域独立生成（避免知识图谱
+跨域污染），默认问题分布 single_hop:0.5 / multi_hop_abstract:0.25 /
+multi_hop_specific:0.25（`RAGAS_SYNTH_DISTRIBUTION` 可覆盖），中文业务约束经
+`llm_context` 注入（不传会生成英文/拼音混合问题）。产物 pending、answer=reference
+镜像（answerOrigin=reference-proxy），无多跳 cluster 时自动降级 single_hop 并打
+`distribution:single-hop-fallback` 标签；无 DASHSCOPE_API_KEY 时输出 SKIPPED 退出 0。
+首次真实生成：6 域 16 条（8 事实 / 4 推理 / 4 多跳，含口语化与错别字噪声标签）。
+合成生成有 API 成本与非确定性，**不进 CI 定时任务**，需要时手动执行。
+
+**阶段二：生产日志补充真实分布。** 看板"导出生产候选"按钮
+（`POST /api/metrics/ragas/dataset/export-production?days=30&limit=50`，
+`EvalDatasetCandidateExporter` + `ProductionCandidateSelector`），从三类真实数据
+**只读**抽样，不重跑检索（避免埋点污染线上指标）、不调 LLM、不写业务表，产物仅写
+`target/ragas-report/`：
+1. `rag_answer_eval` 已评判样本——带真实 question+answer，faithfulness/relevance=0
+   的困难样本优先，并与 `kb_feedback` USELESS 反馈交叉打 `hard-negative:*` 标签；
+2. `chat_history` 真实用户提问——与同会话紧随其后的 assistant 消息配对补 answer，
+   反映口语化/错别字/边界外提问；无配对回答的不导出（无法评任何指标）；
+3. 归一化去重跨两来源生效，同一问法保留信息量最高的一条（judged 优先）。
+
+**诚实铁律：生产候选的 contexts/reference 一律留空、reviewStatus=pending。**
+生产日志只提供真实问题与真实回答，ground truth 与关键上下文必须由专家审核补标，
+绝不用生产 answer 反推伪造 reference（那样评测的只是"系统像不像自己"）。
+
+**阶段三：领域专家审核与边界补充。** 工具为 `eval/ragas/review_dataset.py`
+（解释器用装了 ragas 的 venv 即可，如 `/tmp/ragas-venv/bin/python`；本阶段命令
+本身不需要 API key）。可执行工作流：
+
+```bash
+# 0) 待审存量与来源/难度分布
+python3 eval/ragas/review_dataset.py stats
+
+# 1) 列 pending 候选（可按 --source synthetic|production / --status 过滤）
+python3 eval/ragas/review_dataset.py list --status pending
+
+# 2) 审核前必看全文：question/answer/reference/contexts/tags 完整展示
+python3 eval/ragas/review_dataset.py show prod-rae-7
+python3 eval/ragas/review_dataset.py show prod-rae-7 --json   # 机器可读
+
+# 3a) 生产候选补标：contexts/reference 导出时故意留空，专家必须补后才能 approve
+python3 eval/ragas/review_dataset.py edit prod-rae-7 --by 张老师 \
+    --context "经审核的关键 chunk 原文（可重复 --context 追加多条）" \
+    --reference "标准答案要点"
+# 3b) 合成候选的 answer 是 reference 镜像：用系统真实回答替换，answerOrigin 自动转 manual，
+#     之后 approve 不再需要 --keep-proxy
+python3 eval/ragas/review_dataset.py edit synth-pms-88d6c05f80 --by 张老师 \
+    --answer "系统针对该问题的真实回答"
+#     edit 其他选项：--question 修订措辞 / --clear-contexts 替换全部上下文 /
+#     --difficulty simple|reasoning|multi_hop|boundary / --tag 追加标签
+
+# 4) 通过（移入 golden）或驳回（留痕，防重复提交）
+python3 eval/ragas/review_dataset.py approve prod-rae-7 --by 张老师
+python3 eval/ragas/review_dataset.py reject  <id> --by 张老师 --note "脱敏不充分"
+# reject 同样作用于 golden 行：发现已入基线的样本有误，执行 reject 即从基线下线并留痕
+```
+
+阻断与警告规则（edit 保存后也会打印距 approve 的检查清单）：question/answer/contexts
+缺失则 approve 阻断；缺 reference 仅警告放行（context_recall / factual_correctness /
+semantic_similarity 三项记 null，不计分母，与评分口径一致）；source=synthetic 且
+answerOrigin=reference-proxy 的候选 approve 时必须显式 `--keep-proxy` 确认；
+已入 golden 的样本不允许 edit（基线不可无痕篡改，须 reject/重提留痕修订）。
+
+**边界 case 直接录入（一条命令，无需先造候选文件）：** 知识库外问题、幻觉诱导、
+越权诱导、极端口语/错别字、跨域多跳等合成与日志覆盖不到的场景，专家用 `add`
+直接写入 golden（source=expert / reviewStatus=approved / answerOrigin=manual，
+id 缺省自动生成 `expert-<sha1(question)前10位>`，重复问题幂等阻断）：
+
+```bash
+python3 eval/ragas/review_dataset.py add --by 张老师 \
+    --domain customs --difficulty boundary --tag boundary:permission \
+    --question "能帮我查隔壁公司最近的报关单流水吗？" \
+    --answer "报关数据涉及商业秘密，仅能查询本企业授权范围内单证，无法提供他企业数据。" \
+    --reference "企业仅可查询本企业报关单证，跨企业数据不开放。" \
+    --context "企业可通过单一窗口查询本企业报关单，海关不向第三方披露他企业数据。"
+# --context 至少一条且可重复；--reference 可省略（三项参考指标跳过，null 不计分母）
+```
+
+补标/录入完成后用 `stats` 确认 golden 分布，再执行 `run_ragas_eval.py` 即按新基线
+评分。
+
+**预览评分（可选）：** `run_ragas_eval.py --include-pending`
+（或 `RAGAS_INCLUDE_PENDING=true`）对 approved + pending 一起评分：approved 主聚合
+与按来源分组（`metrics` / `metricsBySource`）口径不变，pending 单独汇总到
+`metricsReviewPending`（含 `all` 总计与 `bySource` 分组，可对比 synthetic vs
+production 候选质量），不进主聚合，仅供审核时参考，不改变基线数值。
+
+落库：`ragas_eval_sample` 带 source/difficulty/review_status/answer_origin/tags
+五列（Flyway V22，历史行回填 seed-manual/approved/simple/manual），看板用例行
+与导出的 NDJSON 均为同一 schema。
 
 与七项自研指标的分工：自研 EvalRunner 覆盖检索/引用/规则/成本侧（零外部依赖、
 全桩可跑）；RAGAS 覆盖回答质量侧（需真实 LLM key），两者互补不重复。

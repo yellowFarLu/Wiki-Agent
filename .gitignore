@@ -17,3 +17,12 @@ target/
 # 日志
 *.log
 .worktrees/
+
+# Python 字节码
+__pycache__/
+*.pyc
+
+# 三阶段评测数据流水线：生产日志候选/驳回留痕含真实用户问答，严禁入库
+# （流程见 docs/operations/eval-baseline.md §6.2；合成候选为虚构数据可入库）
+eval/ragas/datasets/candidates-production.jsonl
+eval/ragas/datasets/reviewed-rejected.jsonl

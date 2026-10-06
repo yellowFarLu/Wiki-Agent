@@ -6,9 +6,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.servlet.view.RedirectView;
 
 /**
- * 老 8080 静态页与早期一级路由的统一入口重定向。
+ * 旧版静态页与早期一级路由的统一入口重定向。
  * <p>
- * 控制台已收敛为单页（/?tab=xxx），Next.js 静态导出产物由 Spring Boot 托管在 8080；
+ * 控制台已收敛为单页（/?tab=xxx），Next.js 静态导出产物由 Spring Boot 托管在 8090；
  * 旧书签/硬链接（/chat、/tasks/{id} 等）在此 307 到对应 Tab 查询串，
  * 与 frontend/next.config.mjs 在 dev/standalone 模式下的 redirects 保持一致。
  */

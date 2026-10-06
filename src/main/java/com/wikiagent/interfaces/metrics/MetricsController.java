@@ -1,5 +1,6 @@
 package com.wikiagent.interfaces.metrics;
 
+import com.wikiagent.application.knowledge.EvalDatasetCandidateExporter;
 import com.wikiagent.application.knowledge.MetricsAggregationJob;
 import com.wikiagent.application.knowledge.MetricsAggregationJob.MetricsSnapshot;
 import com.wikiagent.application.knowledge.RagAnswerJudgeService;
@@ -22,6 +23,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -43,6 +46,7 @@ import java.util.stream.Collectors;
  * POST /api/metrics/ragas/run          — 触发一次 RAGAS 离线评测（异步，202/409）
  * GET /api/metrics/ragas/runs          — RAGAS 历史执行列表（最新在前）
  * GET /api/metrics/ragas/runs/{runId}  — 单次执行详情 + 评测用例集
+ * POST /api/metrics/ragas/dataset/export-production — 阶段二导出生产日志评测候选（NDJSON，pending）
  */
 @RestController
 @RequestMapping("/api/metrics")
@@ -59,6 +63,7 @@ public class MetricsController {
     private final MetricsAggregationJob aggregationJob;
     private final ObjectProvider<RagAnswerJudgeService> judgeServiceProvider;
     private final ObjectProvider<RagasEvalExecutor> ragasExecutorProvider;
+    private final ObjectProvider<EvalDatasetCandidateExporter> datasetExporterProvider;
     private final long tauTimeDays;
     private final double staleThreshold;
 
@@ -71,6 +76,7 @@ public class MetricsController {
                              MetricsAggregationJob aggregationJob,
                              ObjectProvider<RagAnswerJudgeService> judgeServiceProvider,
                              ObjectProvider<RagasEvalExecutor> ragasExecutorProvider,
+                             ObjectProvider<EvalDatasetCandidateExporter> datasetExporterProvider,
                              @Value("${wikiagent.metrics.tau-time-days:180}") long tauTimeDays,
                              @Value("${wikiagent.metrics.stale-threshold:0.3}") double staleThreshold) {
         this.metadataDao = metadataDao;
@@ -82,6 +88,7 @@ public class MetricsController {
         this.aggregationJob = aggregationJob;
         this.judgeServiceProvider = judgeServiceProvider;
         this.ragasExecutorProvider = ragasExecutorProvider;
+        this.datasetExporterProvider = datasetExporterProvider;
         this.tauTimeDays = tauTimeDays;
         this.staleThreshold = staleThreshold;
     }
@@ -331,5 +338,46 @@ public class MetricsController {
         body.put("run", run);
         body.put("samples", samples);
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * 阶段二：导出生产日志评测候选（NDJSON 附件下载）。
+     * 从 rag_answer_eval（困难样本优先）+ chat_history（真实提问分布）+ kb_feedback
+     * 只读抽样，候选 reviewStatus=pending、contexts/reference 留空，须经专家审核
+     * （eval/ragas/review_dataset.py）补标后才能进入 golden 基线。
+     */
+    @PostMapping("/ragas/dataset/export-production")
+    public ResponseEntity<Object> exportProductionCandidates(
+            @RequestParam(name = "days", defaultValue = "30") int days,
+            @RequestParam(name = "limit", defaultValue = "50") int limit) {
+        EvalDatasetCandidateExporter exporter = datasetExporterProvider.getIfAvailable();
+        if (exporter == null) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("message", "RAGAS 评测未启用（wikiagent.ragas.enabled=false）");
+            return ResponseEntity.status(409).body(body);
+        }
+        try {
+            EvalDatasetCandidateExporter.ExportResult result = exporter.export(days, limit);
+            if (result.candidateCount() == 0) {
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("message", "窗口内无可导出候选（judged 扫描 "
+                        + result.judgedConsidered() + " / chat 扫描 " + result.chatConsidered()
+                        + "，去重跳过 " + result.duplicateSkipped() + "，无答案跳过 "
+                        + result.noAnswerSkipped() + "）");
+                return ResponseEntity.status(409).body(body);
+            }
+            String fileName = result.filePath().getFileName().toString();
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            "attachment; filename=\"" + fileName + "\"")
+                    .contentType(MediaType.parseMediaType("application/x-ndjson; charset=UTF-8"))
+                    .body(result.ndjson());
+        } catch (Exception e) {
+            // MySQL 不可用等基础设施问题如实 500，不静默产出空集假装成功
+            log.warn("生产评测候选导出失败: {}", e.getMessage());
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("message", "导出失败: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return ResponseEntity.status(500).body(body);
+        }
     }
 }

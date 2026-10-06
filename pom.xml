@@ -72,10 +72,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
+        <!-- H2 仅用于单元/集成测试（@DataJpaTest 等）；主代码与生产部署不再使用 -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>runtime</scope>
+            <scope>test</scope>
         </dependency>
 
         <!-- v6 §22.5 Redis 分布式锁 + 短期记忆 / Episodic Memory（StringRedisTemplate） -->

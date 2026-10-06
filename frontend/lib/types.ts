@@ -419,6 +419,16 @@ export interface RagasSample {
   runId: string;
   sampleId: string;
   domainTag: string | null;
+  /** 三阶段数据流水线来源：seed-manual/synthetic/production/expert；旧 run 回填 seed-manual。 */
+  source: string | null;
+  /** 难度：simple/reasoning/multi_hop/boundary。 */
+  difficulty: string | null;
+  /** 审核状态：pending/approved/rejected；基线只评 approved。 */
+  reviewStatus: string | null;
+  /** 答案来源：manual/reference-proxy/production。 */
+  answerOrigin: string | null;
+  /** 逗号分隔标签（noise/hard-negative/distribution 等）。 */
+  tags: string | null;
   question: string;
   contexts: string;
   answer: string;

@@ -10,30 +10,29 @@ spring:
       max-request-size: 200MB
 
   # ============================================================
-  # v1-v5 §11.2 数据源：开发期 H2 MySQL 兼容模式（生产切 MySQL）
-  # 实施校正：原方案文档 §11.2 直接用 MySQL；为保持"变更前可启动"
-  # 约束，开发期保留 H2 文件库 + MODE=MySQL，生产用 MYSQL_HOST 环境变量切换
+  # v1-v5 §11.2 数据源：本地开发直连 MySQL（默认 profile 不再退化到 H2）
+  # 所有默认值对齐生产口径；如需零依赖快速启动，请显式激活 dev profile
   # ============================================================
   datasource:
-    url: ${MYSQL_URL:jdbc:h2:file:./data/h2/kb;AUTO_SERVER=TRUE;MODE=MySQL}
-    driver-class-name: ${MYSQL_DRIVER:org.h2.Driver}
-    username: ${MYSQL_USER:sa}
-    password: ${MYSQL_PASSWORD:}
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/wikiagent}
+    driver-class-name: ${MYSQL_DRIVER:com.mysql.cj.jdbc.Driver}
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root}
   jpa:
     hibernate:
       ddl-auto: ${JPA_DDL:update}   # 开发 update；生产 validate
     open-in-view: false
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.MySQLDialect}
 
   # Flyway 数据库迁移（V1-V8 SQL）
   flyway:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true       # 已有库基线化，不阻断启动
-    validate-on-migrate: false       # H2 兼容模式部分语法差异，放宽校验
-    create-schemas: true             # 自动创建 schema（H2 public / MySQL wikiagent）
+    validate-on-migrate: true       # MySQL 标准模式，严格校验
+    create-schemas: true             # 自动创建 schema（MySQL wikiagent）
 
   # Redis（§3 短期记忆 + §6 历史事件 SETNX + §22 分布式锁）
   data:
@@ -57,7 +56,7 @@ spring:
 
   # v4 §16 集中式 Session 兜底（通过 wikiagent.session.redis-enabled 条件开启）
   session:
-    store-type: ${SESSION_STORE:none}   # 默认 none；生产 redis
+    store-type: ${SESSION_STORE:redis}   # 默认 redis；零依赖场景显式设为 none
     redis:
       namespace: wikiagent:session
       flush-mode: on_save
@@ -137,7 +136,6 @@ wikiagent:
     intent-model: ${WIKIAGENT_INTENT_MODEL:qwen-flash}     # 意图识别模型（快/省）
     simple-model: ${WIKIAGENT_SIMPLE_MODEL:qwen-plus}      # 简单任务模型
     complex-model: ${WIKIAGENT_COMPLEX_MODEL:qwen-max}     # 复杂任务模型
-    mock-intents-enabled: ${WIKIAGENT_MOCK_INTENTS_ENABLED:true}  # 关闭后 4 个 Mock 意图降级为 knowledge_qa
 
   # v3 §6.5 身份权限
   identity:
@@ -196,21 +194,21 @@ wikiagent:
         categories: [涉政, 涉黄, 暴恐, 违法违规]
         openai-moderation-enabled: false
       presidio:
-        sidecar-url: ${PRESIDIO_URL:http://presidio-analyzer:5050}
+        sidecar-url: ${PRESIDIO_URL:http://localhost:5050}
         operators: [mask]
 
   # v4 §16 接入层会话亲和
   session:
-    redis-enabled: ${WIKIAGENT_SESSION_REDIS:false}   # 默认 false；生产 true
+    redis-enabled: ${WIKIAGENT_SESSION_REDIS:true}   # 默认 true；零依赖场景显式设为 false
 
   # ============================================================
-  # 实施校正：Redis 总开关（开发默认 false，无需 Redis 即可启动）
+  # Redis 总开关（默认 true，本地开发必须启动 Redis）
   # false 时 ConditionalInfraEnvironmentPostProcessor 排除 Redisson/Redis
   #   自动装配，短期记忆/情景记忆/分布式锁切换进程内降级实现；
-  #   docker-compose / 生产环境必须置 true（§3/§6/§22 硬约束）。
+  #   如需零依赖快速启动，请显式激活 dev profile。
   # ============================================================
   redis:
-    enabled: ${REDIS_ENABLED:false}
+    enabled: ${REDIS_ENABLED:true}
 
   # v6 §20 Plan-Execute-Reflect-Optimize
   pero:
@@ -248,7 +246,7 @@ wikiagent:
     enabled: ${WIKIAGENT_MULTI_AGENT_ENABLED:true}
     framework: spring-ai-alibaba-agent-framework
     supervisor-factory: lazy
-    intent-agents: [knowledge_qa, ai_coding, customer_intake, business_rule_config, order_query]
+    intent-agents: [knowledge_qa]
     routing-field: identity
 
   # v6 §22 多 Agent 并发控制
@@ -266,12 +264,12 @@ wikiagent:
 
   # ============================================================
   # 子项目 A §6 任务框架（MySQL 状态机 + MQ 投递 + Redis 协调）
-  # 框架默认开启 + mq=local：JVM 本地调度，开发环境零外部中间件；
-  # docker compose / 生产通过 TASK_MQ=rocketmq 切换 RocketMQ。
+  # 默认 mq=rocketmq，本地开发必须启动 RocketMQ；
+  # 如需零外部中间件，请显式激活 dev profile 或设 TASK_MQ=local。
   # ============================================================
   task:
     enabled: ${WIKIAGENT_TASK_ENABLED:true}
-    mq: ${TASK_MQ:local}                # local | rocketmq
+    mq: ${TASK_MQ:rocketmq}             # rocketmq | local
     concurrency:
       ingest: 2                         # cg-task-ingest 消费并发
       agent: 4                          # cg-task-agent 消费并发
@@ -288,9 +286,10 @@ wikiagent:
     backoff: [10s, 30s, 2m]            # 指数退避（RocketMQ 延迟等级 3/4/6）
 
   ingest:
-    parent-chars: 1000
+    # 父子块尺寸，单位 token（QwenStyleTokenEstimator 离线估算，中文约 1 字=1 token）；选型依据见 docs/ingestion.md §2.1
+    parent-size: 1000
     parent-overlap: 150
-    child-chars: 350
+    child-size: 350
     child-overlap: 60
     embedding-batch: 10
   # 子项目 B：文档智能解析（OCR/ASR/版面/表格）。provider=none 或缺 API Key 时流水线自动跳过 AI 能力

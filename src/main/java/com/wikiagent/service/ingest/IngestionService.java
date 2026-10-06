@@ -426,8 +426,8 @@ public class IngestionService {
         doc.setStatus(KbDocument.CHUNKING);
         docRepo.save(doc);
         ChunkSplitter splitter = new ChunkSplitter(
-                props.ingest().parentChars(), props.ingest().parentOverlap(),
-                props.ingest().childChars(), props.ingest().childOverlap());
+                props.ingest().parentSize(), props.ingest().parentOverlap(),
+                props.ingest().childSize(), props.ingest().childOverlap());
         List<String> parents = splitter.splitParents(cleaned);
         if (parents.isEmpty()) {
             throw new IllegalStateException("文档清洗切分后为空，请检查文档内容");

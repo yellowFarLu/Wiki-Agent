@@ -85,13 +85,11 @@ wikiagent:
     redis-enabled: true
 
   # ------------------------------------------------------------
-  # 降级/mock/noop：全部显式关闭或受控（安全默认；如确需降级必须由部署变量显式打开）
+  # 降级/noop：全部显式关闭或受控（安全默认；如确需降级必须由部署变量显式打开）
   # ------------------------------------------------------------
   fallback:
     web-search-enabled: ${WIKIAGENT_FALLBACK_WEB_SEARCH_ENABLED:false}
     own-knowledge-enabled: ${WIKIAGENT_FALLBACK_OWN_KNOWLEDGE_ENABLED:false}
-  routing:
-    mock-intents-enabled: false                # 禁止 Mock 意图以假乱真
   parse:
     # 受控：默认 none（不静默调用 AI 解析）；启用必须由部署显式选择 provider
     provider: ${WIKIAGENT_PARSE_PROVIDER:none}

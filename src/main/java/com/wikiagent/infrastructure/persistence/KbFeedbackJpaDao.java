@@ -28,6 +28,14 @@ public interface KbFeedbackJpaDao extends JpaRepository<KbFeedbackEntity, Long> 
     List<Object[]> countGroupedByChunkAndType();
 
     /**
+     * 阶段二生产候选导出：窗口内被点「无用」的 chunk/docId 集合（困难样本信号，
+     * 用于给 rag_answer_eval.sourceDocIds 命中的候选打 hard-negative 标签）。
+     */
+    @Query("SELECT DISTINCT f.chunkId FROM KbFeedbackEntity f "
+            + "WHERE f.chunkId IS NOT NULL AND f.feedbackType = 'USELESS' AND f.createdAt >= :since")
+    List<String> findUselessChunkIdsSince(@Param("since") Instant since);
+
+    /**
      * 窗口内全部反馈（含会话级）按类型计数，用于看板原始计数与检索计数同窗口展示。
      * 每行：[feedbackType, count]。
      */

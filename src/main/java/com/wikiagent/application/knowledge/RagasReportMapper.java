@@ -54,6 +54,22 @@ public class RagasReportMapper {
             s.setRunId(runId);
             s.setSampleId(textOr(node.path("id"), "unknown"));
             s.setDomainTag(nullableText(node.path("domain")));
+            // provenance 缺失（旧版脚本产出的报告）时默认人工基线 approved，与 Python 侧一致
+            s.setSource(textOr(node.path("source"), "seed-manual"));
+            s.setDifficulty(textOr(node.path("difficulty"), "simple"));
+            s.setReviewStatus(textOr(node.path("reviewStatus"), "approved"));
+            s.setAnswerOrigin(textOr(node.path("answerOrigin"), "manual"));
+            JsonNode tagsNode = node.path("tags");
+            if (tagsNode.isArray() && tagsNode.size() > 0) {
+                StringBuilder sb = new StringBuilder();
+                for (JsonNode tag : tagsNode) {
+                    if (sb.length() > 0) {
+                        sb.append(',');
+                    }
+                    sb.append(tag.asText());
+                }
+                s.setTags(sb.length() <= 512 ? sb.toString() : sb.substring(0, 512));
+            }
             s.setQuestion(textOr(node.path("question"), ""));
             s.setContexts(toJson(node.path("contexts")));
             s.setAnswer(textOr(node.path("answer"), ""));

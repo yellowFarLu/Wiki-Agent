@@ -72,8 +72,6 @@ wikiagent:
     # 显式降级开关：默认按生产口径关闭；演练降级时用环境变量单独打开
     web-search-enabled: ${WIKIAGENT_FALLBACK_WEB_SEARCH_ENABLED:false}
     own-knowledge-enabled: ${WIKIAGENT_FALLBACK_OWN_KNOWLEDGE_ENABLED:false}
-  routing:
-    mock-intents-enabled: false
   parse:
     provider: ${WIKIAGENT_PARSE_PROVIDER:none}
   task:

@@ -35,8 +35,9 @@ jobs:
           retention-days: 30
 
   # RAGAS 离线评测（ragas==0.4.3，见 eval/ragas/run_ragas_eval.py 头部说明）：
-  # 对 eval/ragas/golden-ragas.jsonl 黄金集跑 6 项 RAGAS 指标（faithfulness /
-  # answer_relevancy / context_precision_without_reference / context_recall /
+  # 对 eval/ragas/datasets/golden-ragas.jsonl 黄金集（仅 reviewStatus=approved）跑
+  # 6 项 RAGAS 指标（faithfulness / answer_relevancy /
+  # context_precision_without_reference / context_recall /
   # factual_correctness / semantic_similarity），judge 模型走 DashScope
   # OpenAI 兼容端点（qwen-plus + text-embedding-v3），与线上同供应商。
   # report-only 门禁：阈值待首次基线后按 docs/operations/eval-baseline.md §4 惯例约定。
@@ -56,6 +57,10 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/pip install -r eval/ragas/requirements.txt
+
+      # 三阶段评测数据流水线（合成/生产候选/审核 CLI）纯单测，无需 API key
+      - name: Run dataset pipeline unit tests
+        run: .venv/bin/python -m unittest discover -s eval/ragas/tests
 
       - name: Run RAGAS evaluation
         env:

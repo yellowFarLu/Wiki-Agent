@@ -5,3 +5,6 @@ openai>=1.40,<2.0
 # ragas 0.4.3 未钉 langchain 系版本，langchain-community>=0.4 已移除
 # chat_models.vertexai 导致 ragas 导入即崩，必须钉 <0.4（本机实测验证）
 langchain-community<0.4
+# ragas 0.4.3 TestsetGenerator（generate_synthetic.py 合成数据）做字符串距离
+# 时直接 import rapidfuzz，但未把它声明进依赖，缺失会 ModuleNotFoundError
+rapidfuzz>=3.0,<4.0
