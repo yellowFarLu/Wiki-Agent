@@ -72,12 +72,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
-        <!-- H2 仅用于单元/集成测试（@DataJpaTest 等）；主代码与生产部署不再使用 -->
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>test</scope>
-        </dependency>
 
         <!-- v6 §22.5 Redis 分布式锁 + 短期记忆 / Episodic Memory（StringRedisTemplate） -->
         <dependency>
@@ -145,7 +139,7 @@
 
         <!-- v1-v5 §11.1 基础设施依赖 -->
 
-        <!-- MySQL 驱动（生产用；开发期 H2 兼容模式回退） -->
+        <!-- MySQL 驱动（生产与测试统一使用真实 MySQL，不使用任何内嵌数据库） -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
