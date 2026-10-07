@@ -32,8 +32,8 @@ body::before {
     radial-gradient(46% 54% at 82% 88%, rgba(14, 165, 233, 0.28), transparent 62%),
     radial-gradient(40% 48% at 18% 88%, rgba(168, 85, 247, 0.24), transparent 62%),
     linear-gradient(160deg, #eef2ff 0%, #f6f3ff 46%, #ecf7ff 100%);
-  background-size: 220% 220%;
-  animation: wa-aurora 28s ease-in-out infinite;
+  /* 性能：背景保持静态极光，不做全屏 background-position 无限动画
+     （fixed 全屏多层渐变持续动画会每帧重绘整个视口，拖慢所有页面交互）。 */
 }
 
 body::after {
@@ -99,13 +99,8 @@ a {
   pointer-events: none;
 }
 .wa-header::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.08) 50%, transparent 70%);
-  transform: translateX(-100%);
-  animation: wa-sheen 9s ease-in-out infinite;
-  pointer-events: none;
+  /* 性能：不再生成常驻扫光层（原 wa-sheen 无限动画持续触发顶栏合成/重绘）。 */
+  content: none;
 }
 
 .wa-brand-wrap {
@@ -127,7 +122,7 @@ a {
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.28),
     0 6px 18px rgba(217, 70, 239, 0.55);
-  animation: wa-logo-pulse 3.2s ease-in-out infinite;
+  /* 性能：移除 wa-logo-pulse 常驻光晕动画。 */
 }
 .wa-brand {
   font-size: 20px;
@@ -184,26 +179,24 @@ a {
   background: linear-gradient(135deg, #818cf8, #e879f9) !important;
 }
 
-/* ===== 玻璃拟态卡片 ===== */
+/* ===== 卡片 ===== */
 .ant-card.ant-card {
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  /* 性能：不再对每张卡片使用 backdrop-filter 模糊（全屏卡片模糊叠加极光背景
+     会在滚动/打字/动画时持续触发高成本背景采样）；改用近不透明底色保证可读性。 */
+  background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.85);
   border-radius: 18px;
   box-shadow:
     0 10px 34px rgba(49, 46, 129, 0.1),
     0 2px 8px rgba(49, 46, 129, 0.06);
-  transition:
-    transform 0.28s ease,
-    box-shadow 0.28s ease;
+  transition: box-shadow 0.2s ease;
   animation: wa-fade-up 0.5s ease both;
 }
 .ant-card.ant-card:hover {
-  transform: translateY(-2px);
+  /* 性能：移除 hover 位移（全局卡片 translateY 会在鼠标移动时不断创建/销毁合成层）。 */
   box-shadow:
-    0 18px 44px rgba(79, 70, 229, 0.17),
-    0 4px 12px rgba(79, 70, 229, 0.08);
+    0 14px 38px rgba(79, 70, 229, 0.15),
+    0 3px 10px rgba(79, 70, 229, 0.07);
 }
 .ant-card .ant-card-head {
   border-bottom: 1px solid rgba(99, 102, 241, 0.14);
@@ -220,11 +213,9 @@ a {
   max-width: 100%;
   margin: 0 0 24px !important;
   padding: 6px;
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.9);
   border-radius: 999px;
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
   box-shadow: 0 10px 28px rgba(79, 70, 229, 0.14);
 }
 .wa-main-tabs > .ant-tabs-nav::before {
@@ -238,7 +229,9 @@ a {
   background: transparent !important;
   color: #4b5563;
   font-weight: 500;
-  transition: all 0.25s ease;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease;
 }
 .wa-main-tabs .ant-tabs-nav .ant-tabs-tab:hover {
   color: #7c3aed;
@@ -306,10 +299,8 @@ a {
   box-shadow: 0 9px 24px rgba(244, 63, 94, 0.45);
 }
 .ant-btn-default {
-  background: rgba(255, 255, 255, 0.75) !important;
+  background: rgba(255, 255, 255, 0.9) !important;
   border-color: rgba(99, 102, 241, 0.28) !important;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 .ant-btn-default:not(:disabled):not(.ant-btn-disabled):hover {
   border-color: #8b5cf6 !important;
@@ -359,9 +350,7 @@ a {
   border-radius: 8px;
 }
 .ant-segmented {
-  background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.85);
 }
 .ant-pagination .ant-pagination-item {
@@ -395,40 +384,6 @@ a {
 }
 
 /* ===== 动画 ===== */
-@keyframes wa-aurora {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
-}
-@keyframes wa-sheen {
-  0%,
-  62% {
-    transform: translateX(-100%);
-  }
-  82%,
-  100% {
-    transform: translateX(100%);
-  }
-}
-@keyframes wa-logo-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px rgba(255, 255, 255, 0.28),
-      0 6px 18px rgba(217, 70, 239, 0.55);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1px rgba(255, 255, 255, 0.42),
-      0 6px 26px rgba(129, 140, 248, 0.85);
-  }
-}
 @keyframes wa-fade-up {
   from {
     opacity: 0;
@@ -438,6 +393,121 @@ a {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* ===== 对话回答 Markdown 排版（.wa-md） ===== */
+.wa-md {
+  font-size: 14px;
+  line-height: 1.75;
+  word-break: break-word;
+}
+.wa-md > :first-child {
+  margin-top: 0;
+}
+.wa-md > :last-child {
+  margin-bottom: 0;
+}
+.wa-md p {
+  margin: 0 0 8px;
+  white-space: normal;
+}
+.wa-md h1,
+.wa-md h2,
+.wa-md h3,
+.wa-md h4 {
+  margin: 16px 0 8px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+.wa-md h1 { font-size: 20px; }
+.wa-md h2 { font-size: 18px; }
+.wa-md h3 { font-size: 16px; }
+.wa-md h4 { font-size: 15px; }
+.wa-md ul,
+.wa-md ol {
+  margin: 0 0 8px;
+  padding-left: 22px;
+}
+.wa-md li {
+  margin: 2px 0;
+}
+.wa-md li > ul,
+.wa-md li > ol {
+  margin: 2px 0;
+}
+.wa-md a {
+  color: #1677ff;
+  text-decoration: none;
+}
+.wa-md a:hover {
+  text-decoration: underline;
+}
+.wa-md strong {
+  font-weight: 600;
+}
+.wa-md blockquote {
+  margin: 0 0 8px;
+  padding: 2px 12px;
+  border-left: 3px solid rgba(99, 102, 241, 0.4);
+  color: rgba(0, 0, 0, 0.65);
+  background: rgba(99, 102, 241, 0.05);
+  border-radius: 0 8px 8px 0;
+}
+.wa-md blockquote > :last-child {
+  margin-bottom: 0;
+}
+.wa-md code {
+  padding: 2px 6px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 6px;
+}
+.wa-md pre {
+  margin: 0 0 8px;
+  padding: 12px 14px;
+  background: #1e1b3a;
+  border-radius: 10px;
+  overflow-x: auto;
+}
+.wa-md pre code {
+  padding: 0;
+  color: rgba(255, 255, 255, 0.88);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.wa-md hr {
+  margin: 12px 0;
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+.wa-md table {
+  margin: 0 0 8px;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.wa-md th,
+.wa-md td {
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  text-align: left;
+}
+.wa-md th {
+  background: rgba(99, 102, 241, 0.08);
+  font-weight: 600;
+}
+.wa-md img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+/* GFM 任务列表去掉默认圆点 */
+.wa-md li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+.wa-md input[type="checkbox"] {
+  margin-right: 6px;
 }
 
 @media (prefers-reduced-motion: reduce) {

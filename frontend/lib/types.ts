@@ -137,6 +137,8 @@ export interface ChatMessageItem extends Record<string, unknown> {
   role?: string;
   content?: string;
   createdAt?: string;
+  /** assistant 回答的引用来源（历史接口返回，结构与 SSE sources 事件一致）。 */
+  sources?: Source[];
 }
 
 // ============ 血缘 / 版本 ============

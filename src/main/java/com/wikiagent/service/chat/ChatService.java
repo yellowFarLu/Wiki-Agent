@@ -177,7 +177,7 @@ public class ChatService {
                         @Override
                         public void onAnswer(String sid, String finalAnswer) {
                             if (finalAnswer != null && !finalAnswer.isBlank()) {
-                                historyService.save(sid, "assistant", finalAnswer);
+                                historyService.save(sid, "assistant", finalAnswer, evalSources.get());
                             }
                             if (ragEvalRecorder != null) {
                                 ragEvalRecorder.record(sid, userId, evalQuestion.get(), finalAnswer,

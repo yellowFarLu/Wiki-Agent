@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { Button, Tabs, Typography } from 'antd';
 import {
   AuditOutlined,
@@ -46,7 +46,7 @@ function isTabKey(v: string | null): v is TabKey {
 }
 
 /** 材料上传 Tab：默认上传面板 + 最近文档；docId 参数存在时切换为结构化结果（原 /results/[docId]）。 */
-function UploadPane({ docId, onBack }: { docId: string | null; onBack: () => void }) {
+const UploadPane = memo(function UploadPane({ docId, onBack }: { docId: string | null; onBack: () => void }) {
   const [tick, setTick] = useState(0);
 
   if (docId) {
@@ -71,10 +71,10 @@ function UploadPane({ docId, onBack }: { docId: string | null; onBack: () => voi
       <RecentDocuments key={tick} />
     </div>
   );
-}
+});
 
 /** 任务中心 Tab：默认任务列表；taskId 参数存在时切换为任务详情（原 /tasks/[taskId]）。 */
-function TasksPane({ taskId, onBack }: { taskId: string | null; onBack: () => void }) {
+const TasksPane = memo(function TasksPane({ taskId, onBack }: { taskId: string | null; onBack: () => void }) {
   if (taskId) {
     return (
       <div>
@@ -96,10 +96,10 @@ function TasksPane({ taskId, onBack }: { taskId: string | null; onBack: () => vo
       <TaskTable />
     </div>
   );
-}
+});
 
 /** 人工工作台 Tab：保留原有页内三 Tabs（复核案件 / 人工任务 / 历史版本）。 */
-function WorkbenchPane() {
+const WorkbenchPane = memo(function WorkbenchPane() {
   const [activeTab, setActiveTab] = useState('review');
   return (
     <div>
@@ -121,7 +121,7 @@ function WorkbenchPane() {
       />
     </div>
   );
-}
+});
 
 /**
  * 统一控制台大页面：新老页面功能合并为 8 个顶部 Tabs。
@@ -133,6 +133,25 @@ function WorkbenchPane() {
  * 对话「查链路」跳转 ?tab=observe&sessionId= 自动查询执行路径。
  * 已激活的 Tab 保持挂载（antd Tabs 默认不销毁），对话 SSE 等状态切 Tab 不丢失。
  */
+/**
+ * 无 props 的重型面板提升为模块级常量元素：引用永久不变，
+ * Console 重渲染（如切 Tab、URL 参数变化）时 React 自动 bail out 这些子树，
+ * 避免每次都对已挂载的面板做 reconcile。
+ */
+const CHAT_PANE = <ChatPanel />;
+const WORKBENCH_PANE = <WorkbenchPane />;
+const GRAPH_PANE = <GraphPanel />;
+const GOVERN_PANE = <GovernPanel />;
+const SETTINGS_PANE = (
+  <div>
+    <Typography.Title level={3} className="wa-page-title">
+      身份设置
+    </Typography.Title>
+    <LocalSettingsForm />
+    <AdminIdentityPanel />
+  </div>
+);
+
 export default function Console() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -142,10 +161,97 @@ export default function Console() {
   const docId = searchParams.get('docId');
   const sessionId = searchParams.get('sessionId');
 
-  const gotoTab = (tab: string) => {
-    // 手动切 Tab 时清除详情参数，避免回到 Tab 仍停在详情视图
-    router.replace(`/?tab=${tab}`, { scroll: false });
-  };
+  const uploadDocId = activeKey === 'upload' ? docId : null;
+  const tasksTaskId = activeKey === 'tasks' ? taskId : null;
+  const observeSessionId = activeKey === 'observe' ? sessionId : null;
+
+  const gotoTab = useCallback(
+    (tab: string) => {
+      // 手动切 Tab 时清除详情参数，避免回到 Tab 仍停在详情视图
+      router.replace(`/?tab=${tab}`, { scroll: false });
+    },
+    [router],
+  );
+  const backToUpload = useCallback(() => router.replace('/?tab=upload', { scroll: false }), [router]);
+  const backToTasks = useCallback(() => router.replace('/?tab=tasks', { scroll: false }), [router]);
+
+  const items = useMemo(
+    () => [
+      {
+        key: 'chat',
+        label: (
+          <span>
+            <MessageOutlined /> 对话
+          </span>
+        ),
+        children: CHAT_PANE,
+      },
+      {
+        key: 'upload',
+        label: (
+          <span>
+            <CloudUploadOutlined /> 材料上传
+          </span>
+        ),
+        children: <UploadPane docId={uploadDocId} onBack={backToUpload} />,
+      },
+      {
+        key: 'tasks',
+        label: (
+          <span>
+            <ScheduleOutlined /> 任务中心
+          </span>
+        ),
+        children: <TasksPane taskId={tasksTaskId} onBack={backToTasks} />,
+      },
+      {
+        key: 'workbench',
+        label: (
+          <span>
+            <ToolOutlined /> 人工工作台
+          </span>
+        ),
+        children: WORKBENCH_PANE,
+      },
+      {
+        key: 'graph',
+        label: (
+          <span>
+            <NodeIndexOutlined /> 知识图谱
+          </span>
+        ),
+        children: GRAPH_PANE,
+      },
+      {
+        key: 'govern',
+        label: (
+          <span>
+            <AuditOutlined /> 知识治理
+          </span>
+        ),
+        children: GOVERN_PANE,
+      },
+      {
+        key: 'observe',
+        label: (
+          <span>
+            <FundOutlined /> 可观测
+          </span>
+        ),
+        children: <ObservePanel initialSessionId={observeSessionId} />,
+      },
+      {
+        key: 'settings',
+        label: (
+          <span>
+            <SettingOutlined /> 身份设置
+          </span>
+        ),
+        children: SETTINGS_PANE,
+      },
+    ],
+    [uploadDocId, tasksTaskId, observeSessionId, backToUpload, backToTasks],
+  );
 
   return (
     <Tabs
@@ -153,99 +259,11 @@ export default function Console() {
       activeKey={activeKey}
       onChange={gotoTab}
       size="large"
+      // antd v6 默认会销毁隐藏面板（切走 ChatPanel 会中断 SSE、切回重载并重播入场动画）；
+      // 显式保活已访问面板，维持「对话 SSE/表单状态切 Tab 不丢失」的产品行为。
+      destroyOnHidden={false}
       tabBarStyle={{ marginBottom: 24 }}
-      items={[
-        {
-          key: 'chat',
-          label: (
-            <span>
-              <MessageOutlined /> 对话
-            </span>
-          ),
-          children: <ChatPanel />,
-        },
-        {
-          key: 'upload',
-          label: (
-            <span>
-              <CloudUploadOutlined /> 材料上传
-            </span>
-          ),
-          children: (
-            <UploadPane
-              docId={activeKey === 'upload' ? docId : null}
-              onBack={() => router.replace('/?tab=upload', { scroll: false })}
-            />
-          ),
-        },
-        {
-          key: 'tasks',
-          label: (
-            <span>
-              <ScheduleOutlined /> 任务中心
-            </span>
-          ),
-          children: (
-            <TasksPane
-              taskId={activeKey === 'tasks' ? taskId : null}
-              onBack={() => router.replace('/?tab=tasks', { scroll: false })}
-            />
-          ),
-        },
-        {
-          key: 'workbench',
-          label: (
-            <span>
-              <ToolOutlined /> 人工工作台
-            </span>
-          ),
-          children: <WorkbenchPane />,
-        },
-        {
-          key: 'graph',
-          label: (
-            <span>
-              <NodeIndexOutlined /> 知识图谱
-            </span>
-          ),
-          children: <GraphPanel />,
-        },
-        {
-          key: 'govern',
-          label: (
-            <span>
-              <AuditOutlined /> 知识治理
-            </span>
-          ),
-          children: <GovernPanel />,
-        },
-        {
-          key: 'observe',
-          label: (
-            <span>
-              <FundOutlined /> 可观测
-            </span>
-          ),
-          children: <ObservePanel initialSessionId={activeKey === 'observe' ? sessionId : null} />,
-        },
-        {
-          key: 'settings',
-          label: (
-            <span>
-              <SettingOutlined /> 身份设置
-            </span>
-          ),
-          children: (
-            <div>
-              <Typography.Title level={3} className="wa-page-title">
-                身份设置
-              </Typography.Title>
-              <LocalSettingsForm />
-              <AdminIdentityPanel />
-            </div>
-          ),
-        },
-      ]}
+      items={items}
     />
   );
 }
