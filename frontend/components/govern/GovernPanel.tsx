@@ -596,8 +596,8 @@ function KnowledgeDashboard() {
             locale={{ emptyText: '该执行暂无评测用例' }}
           />
           <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
-            指标为 RAGAS 框架官方实现（ragas==0.4.3）；"未评"表示该样本该指标评分失败（展开可见错误），不计入分母；
-            无评分时显示"-"，不显示 0。
+            指标为 RAGAS 框架官方实现（ragas==0.4.3）；“未评”表示该样本该指标评分失败（展开可见错误），不计入分母；
+            无评分时显示“-”，不显示 0。
           </Typography.Paragraph>
         </div>
       )}

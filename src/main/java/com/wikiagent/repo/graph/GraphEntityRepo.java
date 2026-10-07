@@ -1,6 +1,7 @@
 package com.wikiagent.repo.graph;
 
 import com.wikiagent.entity.graph.GraphEntity;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -27,6 +28,16 @@ public interface GraphEntityRepo extends JpaRepository<GraphEntity, String> {
 
     /** 按类型查询。 */
     List<GraphEntity> findByTypeAndActiveTrue(String type);
+
+    /** 分页浏览全部有效实体（按创建时间倒序）。 */
+    Page<GraphEntity> findByActiveTrueOrderByCreatedAtDesc(Pageable pageable);
+
+    /** 按类型分页浏览有效实体（按创建时间倒序）。 */
+    Page<GraphEntity> findByTypeAndActiveTrueOrderByCreatedAtDesc(String type, Pageable pageable);
+
+    /** 全部有效实体的类型清单（前端筛选下拉用）。 */
+    @Query("select distinct e.type from GraphEntity e where e.active = true order by e.type")
+    List<String> findDistinctActiveTypes();
 
     /** 删除文档时软下线关联实体。 */
     @Modifying

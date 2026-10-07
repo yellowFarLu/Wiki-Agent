@@ -9,9 +9,11 @@ import com.wikiagent.repo.graph.GraphRelationRepo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -52,6 +54,14 @@ public class GraphRagService {
             return new GraphSearchResult(List.of(), List.of(), List.of(), Set.of());
         }
     }
+
+    /** 实体浏览行（比 GraphNode 多创建时间）。 */
+    public record EntityListRow(String id, String name, String type, String description,
+                                String sourceDocId, String sourceChunkId, LocalDateTime createdAt) {}
+
+    /** 实体分页结果：rows + 总数 + 当前有效类型清单（前端筛选下拉用）。 */
+    public record EntityPage(List<EntityListRow> entities, long total, int page, int size,
+                             List<String> types) {}
 
     /**
      * 按查询文本搜索实体，并做 1-hop 邻居扩展。
@@ -160,6 +170,27 @@ public class GraphRagService {
         stats.put("relationCount", relationRepo.countByActiveTrue());
         stats.put("maxNeighbors", maxNeighbors);
         return stats;
+    }
+
+    /**
+     * 分页浏览有效实体（知识图谱页面"已有实体"清单）。
+     * type 非空时按类型过滤；页码从 0 开始，size 钳制在 1..100。
+     */
+    public EntityPage listEntities(int page, int size, String type) {
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        boolean filterByType = type != null && !type.isBlank();
+        Page<GraphEntity> resultPage = filterByType
+                ? entityRepo.findByTypeAndActiveTrueOrderByCreatedAtDesc(
+                        type.trim(), PageRequest.of(safePage, safeSize))
+                : entityRepo.findByActiveTrueOrderByCreatedAtDesc(
+                        PageRequest.of(safePage, safeSize));
+        List<EntityListRow> rows = resultPage.getContent().stream()
+                .map(e -> new EntityListRow(e.getId(), e.getName(), e.getType(), e.getDescription(),
+                        e.getSourceDocId(), e.getSourceChunkId(), e.getCreatedAt()))
+                .toList();
+        return new EntityPage(rows, resultPage.getTotalElements(), safePage, safeSize,
+                entityRepo.findDistinctActiveTypes());
     }
 
     /** 转换为领域节点。 */

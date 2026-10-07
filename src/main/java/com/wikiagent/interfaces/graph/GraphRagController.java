@@ -32,6 +32,18 @@ public class GraphRagController {
         return ResponseEntity.ok(graphRagService.getStats());
     }
 
+    /**
+     * 分页浏览有效实体（"已有实体"清单）。
+     * page 从 0 开始；type 可选过滤。
+     */
+    @GetMapping("/entities")
+    public ResponseEntity<GraphRagService.EntityPage> entities(
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "20") int size,
+            @RequestParam(name = "type", required = false) String type) {
+        return ResponseEntity.ok(graphRagService.listEntities(page, size, type));
+    }
+
     /** 图搜索：实体匹配 + 邻居扩展。 */
     @GetMapping("/search")
     public ResponseEntity<GraphRagService.GraphSearchResult> search(@RequestParam String q) {

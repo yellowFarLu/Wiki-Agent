@@ -4,7 +4,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
-import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 
@@ -19,7 +19,7 @@ public interface ChatHistoryJpaDao extends JpaRepository<ChatHistoryEntity, Long
 
     /** 阶段二生产候选导出：窗口内用户消息（时间倒序），用于抽取真实提问分布。 */
     List<ChatHistoryEntity> findByRoleAndCreatedAtAfterOrderByCreatedAtDesc(
-            String role, Instant since, Pageable pageable);
+            String role, LocalDateTime since, Pageable pageable);
 
     /** 阶段二生产候选导出：批量取指定会话的某角色消息（问答配对用）。 */
     List<ChatHistoryEntity> findBySessionIdInAndRoleOrderByCreatedAtAsc(

@@ -17,6 +17,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -88,9 +90,12 @@ public class EvalDatasetCandidateExporter {
         }
 
         // 2) chat_history 用户消息 + 同会话 assistant 配对
+        // createdAt 列为 LocalDateTime（与实体 LocalDateTime.now() 同用系统默认时区），
+        // 统一窗口 since 由 Instant 转换，保证与 rag_answer_eval 窗口语义一致
         List<ChatHistoryEntity> userEntities =
                 chatHistoryDao.findByRoleAndCreatedAtAfterOrderByCreatedAtDesc(
-                        "user", since, PageRequest.of(0, fetchSize));
+                        "user", LocalDateTime.ofInstant(since, ZoneId.systemDefault()),
+                        PageRequest.of(0, fetchSize));
         List<ProductionCandidateSelector.ChatMessage> userMessages = new ArrayList<>();
         Set<String> sessionIds = new LinkedHashSet<>();
         for (ChatHistoryEntity e : userEntities) {

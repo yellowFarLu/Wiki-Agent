@@ -1,9 +1,11 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Card, Empty, Input, List, Spin, Tag, Typography, message } from 'antd';
+import { Card, Empty, Input, List, Select, Spin, Table, Tag, Typography, message } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { SearchOutlined, NodeIndexOutlined } from '@ant-design/icons';
 import { useRouter } from 'next/navigation';
+import { formatDateTime } from '@/lib/datetime';
 
 interface GraphNode {
   id: string;
@@ -30,6 +32,24 @@ interface GraphSearchResult {
   relatedChunkIds: string[];
 }
 
+interface EntityListRow {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  sourceDocId: string;
+  sourceChunkId: string;
+  createdAt: string | null;
+}
+
+interface EntityPage {
+  entities: EntityListRow[];
+  total: number;
+  page: number;
+  size: number;
+  types: string[];
+}
+
 const TYPE_COLORS: Record<string, string> = {
   '人物': '#f5222d',
   '组织': '#fa8c16',
@@ -41,6 +61,38 @@ const TYPE_COLORS: Record<string, string> = {
   '其他': '#8c8c8c',
 };
 
+/** “已有实体”清单列定义。 */
+const entityColumns: ColumnsType<EntityListRow> = [
+  {
+    title: '实体名称',
+    dataIndex: 'name',
+    render: (v: string, r) => (
+      <span>
+        <Tag color={TYPE_COLORS[r.type] ?? 'default'}>{r.type}</Tag>
+        {v}
+      </span>
+    ),
+  },
+  {
+    title: '描述',
+    dataIndex: 'description',
+    ellipsis: true,
+    render: (v: string | null) => v || '-',
+  },
+  {
+    title: '来源文档',
+    dataIndex: 'sourceDocId',
+    width: 170,
+    render: (v: string) => (v ? `${v.slice(0, 13)}…` : '-'),
+  },
+  {
+    title: '抽取时间',
+    dataIndex: 'createdAt',
+    width: 170,
+    render: (v: string | null) => formatDateTime(v),
+  },
+];
+
 export default function GraphPanel() {
   const router = useRouter();
   const [query, setQuery] = useState('');
@@ -49,12 +101,54 @@ export default function GraphPanel() {
   const [stats, setStats] = useState<{ entityCount: number; relationCount: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [entityPage, setEntityPage] = useState<EntityPage | null>(null);
+  const [listLoading, setListLoading] = useState(false);
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [graphTitle, setGraphTitle] = useState<string>('');
 
   useEffect(() => {
     fetch('/api/graph/stats')
       .then((r) => (r.ok ? r.json() : null))
       .then(setStats)
       .catch(() => setStats(null));
+  }, []);
+
+  /** 分页拉取“已有实体”清单；type 非空时按类型过滤。 */
+  const loadEntities = useCallback(async (page: number, size: number, type: string | null) => {
+    setListLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), size: String(size) });
+      if (type) params.set('type', type);
+      const res = await fetch(`/api/graph/entities?${params.toString()}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setEntityPage((await res.json()) as EntityPage);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '实体列表加载失败');
+    } finally {
+      setListLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadEntities(0, 20, null);
+  }, [loadEntities]);
+
+  /** 点击实体行：拉取该实体 1-hop 邻居子图并滚动到可视化区。 */
+  const showEntityGraph = useCallback(async (entity: EntityListRow) => {
+    try {
+      const res = await fetch(`/api/graph/entity/${encodeURIComponent(entity.id)}/neighbors`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as GraphSearchResult;
+      setResult(data);
+      setGraphTitle(entity.name);
+      setError(null);
+      if (data.edges.length === 0) {
+        message.info(`实体「${entity.name}」暂未抽取到关系`);
+      }
+      document.getElementById('wa-graph-viz')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '实体关系加载失败');
+    }
   }, []);
 
   const doSearch = useCallback(async () => {
@@ -66,6 +160,7 @@ export default function GraphPanel() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as GraphSearchResult;
       setResult(data);
+      setGraphTitle(query.trim());
       if (data.matchedEntities.length === 0 && data.neighborEntities.length === 0) {
         message.info('未在知识图谱中找到相关实体');
       }
@@ -259,6 +354,49 @@ export default function GraphPanel() {
         />
       </Card>
 
+      <Card
+        style={{ marginBottom: 16 }}
+        title="已有实体"
+        extra={
+          <Select
+            allowClear
+            placeholder="按类型筛选"
+            style={{ width: 160 }}
+            value={typeFilter ?? undefined}
+            onChange={(v: string | undefined) => {
+              const next = v ?? null;
+              setTypeFilter(next);
+              void loadEntities(0, entityPage?.size ?? 20, next);
+            }}
+            options={(entityPage?.types ?? []).map((t) => ({ value: t, label: t }))}
+          />
+        }
+      >
+        <Table<EntityListRow>
+          rowKey="id"
+          size="small"
+          loading={listLoading}
+          columns={entityColumns}
+          dataSource={entityPage?.entities ?? []}
+          onRow={(r) => ({ onClick: () => void showEntityGraph(r) })}
+          pagination={{
+            current: (entityPage?.page ?? 0) + 1,
+            pageSize: entityPage?.size ?? 20,
+            total: entityPage?.total ?? 0,
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50],
+            showTotal: (t) => `共 ${t} 个实体`,
+          }}
+          onChange={(p) =>
+            loadEntities((p.current ?? 1) - 1, p.pageSize ?? 20, typeFilter)
+          }
+          locale={{ emptyText: '知识图谱中暂无实体，请先上传包含业务知识的材料' }}
+        />
+        <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+          点击实体行查看该实体的关系网络（1-hop 邻居）。
+        </Typography.Paragraph>
+      </Card>
+
       {error && (
         <Card style={{ marginBottom: 16 }}>
           <Typography.Text type="danger">{error}</Typography.Text>
@@ -274,8 +412,11 @@ export default function GraphPanel() {
       {!loading && result && (
         <>
           {(result.matchedEntities.length > 0 || result.neighborEntities.length > 0) ? (
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              <Card title="图谱可视化" style={{ flex: '1 1 600px', minWidth: 400 }}>
+            <div id="wa-graph-viz" style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <Card
+                title={graphTitle ? `图谱可视化：${graphTitle}` : '图谱可视化'}
+                style={{ flex: '1 1 600px', minWidth: 400 }}
+              >
                 <canvas
                   ref={canvasRef}
                   width={600}
