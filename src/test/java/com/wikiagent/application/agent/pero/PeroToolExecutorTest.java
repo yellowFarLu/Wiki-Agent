@@ -1,13 +1,18 @@
 package com.wikiagent.application.agent.pero;
 
+import com.wikiagent.application.business.BusinessSlotGate;
 import com.wikiagent.domain.agent.Reflection;
+import com.wikiagent.infrastructure.tool.GenerateCustomsInfoTool;
 import com.wikiagent.infrastructure.tool.ListAbandonedPathTool;
+import com.wikiagent.infrastructure.tool.QueryOrderTool;
+import com.wikiagent.infrastructure.tool.QueryTrajectoryTool;
 import com.wikiagent.infrastructure.tool.ReadHandoverTool;
 import com.wikiagent.infrastructure.tool.SearchHistoryTool;
 import com.wikiagent.infrastructure.tool.SearchKnowledgeBaseTool;
 import com.wikiagent.infrastructure.tool.UpdateUserProfileTool;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -28,6 +33,9 @@ class PeroToolExecutorTest {
     private UpdateUserProfileTool updateProfile;
     private ReadHandoverTool readHandover;
     private ListAbandonedPathTool listAbandoned;
+    private QueryOrderTool queryOrder;
+    private QueryTrajectoryTool queryTrajectory;
+    private GenerateCustomsInfoTool generateCustoms;
     private PeroToolExecutor executor;
 
     private static final Perception CTX = new Perception() {
@@ -45,7 +53,13 @@ class PeroToolExecutorTest {
         updateProfile = mock(UpdateUserProfileTool.class);
         readHandover = mock(ReadHandoverTool.class);
         listAbandoned = mock(ListAbandonedPathTool.class);
-        executor = new PeroToolExecutor(searchKb, searchHistory, updateProfile, readHandover, listAbandoned);
+        queryOrder = mock(QueryOrderTool.class);
+        queryTrajectory = mock(QueryTrajectoryTool.class);
+        generateCustoms = mock(GenerateCustomsInfoTool.class);
+        ObjectProvider<BusinessSlotGate> slotGateProvider = mock(ObjectProvider.class);
+        when(slotGateProvider.getIfAvailable()).thenReturn(mock(BusinessSlotGate.class));
+        executor = new PeroToolExecutor(searchKb, searchHistory, updateProfile, readHandover,
+                listAbandoned, queryOrder, queryTrajectory, generateCustoms, slotGateProvider);
     }
 
     @Test

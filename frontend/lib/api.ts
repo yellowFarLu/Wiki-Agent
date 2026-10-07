@@ -120,6 +120,33 @@ export async function deleteDocument(id: string): Promise<void> {
   }
 }
 
+// ============ 业务文件（清关映射表） ============
+
+/** 映射表上传结果（POST /api/business/files/mapping）。 */
+export interface BusinessMappingUpload {
+  fileId: string;
+  rowCount: number;
+  rows: Array<{ smallPackageNo: string; bigPackageNo: string }>;
+}
+
+/**
+ * 上传清关映射表（multipart）。
+ * 后端确定性校验：xlsx + 首行含「小包号、大包号」+ ≥1 行数据；
+ * 校验失败后端返回 422，{@link handleResponse} 抛出含具体原因的错误。
+ * 上传成功即授权（清关生成免人工批准）。
+ */
+export async function uploadBusinessMapping(file: File): Promise<BusinessMappingUpload> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch('/api/business/files/mapping', {
+    method: 'POST',
+    // 不显式设置 Content-Type，由浏览器生成 multipart boundary
+    headers: authHeaders(),
+    body: form,
+  });
+  return handleResponse<BusinessMappingUpload>(res);
+}
+
 // ============ 任务 ============
 export function listTasks(params?: { status?: string; mine?: boolean }): Promise<TaskView[]> {
   const search = new URLSearchParams();

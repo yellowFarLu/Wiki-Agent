@@ -220,6 +220,8 @@ wikiagent:
         search_history: [search_history]
         update_profile: [update_user_profile]
         tool: [search_knowledge_base, search_history, update_user_profile, read_handover, list_abandoned_paths]
+        business_query: [query_order, query_trajectory]
+        customs_generate: [generate_customs_info]
         generate: []
     reflect:
       model: ${WIKIAGENT_COMPLEX_MODEL:qwen-max}
@@ -237,9 +239,41 @@ wikiagent:
       update_user_profile:
         required-scope: profile:write
         requires-approval: true
+      # 业务只读查询：需 order:read，免批准
+      query_order:
+        required-scope: order:read
+        requires-approval: false
+      query_trajectory:
+        required-scope: order:read
+        requires-approval: false
+      # 清关生成（产物类）：需 customs:write，免人工批准（上传映射表即授权，选 B）
+      generate_customs_info:
+        required-scope: customs:write
+        requires-approval: false
     agent-allowlists:
       # PERO 主 Agent 默认全量白名单；示例给出 Supervisor 收窄示例（可被部署覆盖）
       pero-agent: [search_knowledge_base, search_history, update_user_profile, read_handover, list_abandoned_paths]
+      # 业务意图网关专用 Agent（订单/轨迹/清关）
+      business-agent: [query_order, query_trajectory, generate_customs_info]
+
+  # ============================================================
+  # 业务意图网关（订单查询 / 轨迹查询 / 清关信息生成）
+  # 在四层链路之前拦截；知识问答/识别失败自动降级到现有链路（用户无感）
+  # ============================================================
+  business-intent:
+    enabled: ${WIKIAGENT_BUSINESS_INTENT_ENABLED:true}
+    confidence-threshold: ${WIKIAGENT_BIZ_INTENT_CONFIDENCE:0.8}
+    order-no-regex: "^[A-Za-z0-9]{8,20}$"
+    max-clarify-retries: 2
+    idempotency-ttl-hours: 24
+    file-base-dir: data/business-files
+    re-prompt-max: 1
+    retry-base-delay-ms: 1000
+    retry-max-delay-ms: 60000
+    retry-max-attempts: 2
+    circuit-failure-threshold: 5
+    circuit-open-seconds: 30
+    default-scopes: [order:read, customs:write]
 
   # v6 §21 Multi-Agent 架构
   multi-agent:

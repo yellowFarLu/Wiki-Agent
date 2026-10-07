@@ -2,13 +2,20 @@ package com.wikiagent.application.agent.pero;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wikiagent.application.business.BusinessSlotGate;
+import com.wikiagent.domain.business.OrderInfo;
+import com.wikiagent.domain.business.TrajectoryNode;
+import com.wikiagent.infrastructure.tool.GenerateCustomsInfoTool;
 import com.wikiagent.infrastructure.tool.ListAbandonedPathTool;
+import com.wikiagent.infrastructure.tool.QueryOrderTool;
+import com.wikiagent.infrastructure.tool.QueryTrajectoryTool;
 import com.wikiagent.infrastructure.tool.ReadHandoverTool;
 import com.wikiagent.infrastructure.tool.SearchHistoryTool;
 import com.wikiagent.infrastructure.tool.SearchKnowledgeBaseTool;
 import com.wikiagent.infrastructure.tool.UpdateUserProfileTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -18,19 +25,14 @@ import java.util.Map;
 /**
  * v6 PERO 路径真实 ToolExecutor（替换 §20 的 StubToolExecutor 占位）。
  * <p>
- * 将 {@link ReActAction}（name + args JSON）分派到五个真实工具组件：
- * <ul>
- *   <li>{@code search_knowledge_base}：{"query":"..."}（args 非 JSON 时整体作为 query 回退）</li>
- *   <li>{@code search_history}：{"query":"...","topK":5}（topK/top_k 可选）</li>
- *   <li>{@code update_user_profile}：{"key":"字段名","value":"字段值"}（userId 取自 Perception）</li>
- *   <li>{@code read_handover} / {@code list_abandoned_paths}：无参（userId/sessionId 取自 Perception）</li>
- * </ul>
+ * 将 {@link ReActAction}（name + args JSON）分派到八个真实工具组件：
+ * 5 个既有工具（检索/历史/档案/交接）+ 3 个业务工具（订单/轨迹/清关，经 {@link BusinessSlotGate} 过槽位硬闸）。
+ * <p>
  * 参数校验失败、JSON 解析失败、未知工具均以明确文本作为 Observation 返回，
  * 让 ReAct 循环据此前进或自愈，不抛异常、不返回桩文本。
  * <p>
- * 装配：仅在 {@code wikiagent.pero.enabled=true}（缺省值即 true）时激活；
- * {@code pero.enabled=false} 的 v1-v2 路径由 {@link StubToolExecutor} 占位
- * （该路径工具调用走 NodeExecutor 直接分派，不经本接口）。
+ * 业务工具的 {@code SlotClarificationSignal} 原样穿出（由 ReActExecutor 透传、网关捕获），
+ * 本类只 catch {@link IllegalArgumentException}（参数错误）不吞信号。
  */
 @Component
 @ConditionalOnProperty(name = "wikiagent.pero.enabled", havingValue = "true", matchIfMissing = true)
@@ -42,24 +44,38 @@ public class PeroToolExecutor implements ToolExecutor {
     /** 已注册工具名（用于未知工具提示）。 */
     private static final List<String> KNOWN = List.of(
             SearchKnowledgeBaseTool.NAME, SearchHistoryTool.NAME, UpdateUserProfileTool.NAME,
-            ReadHandoverTool.NAME, ListAbandonedPathTool.NAME);
+            ReadHandoverTool.NAME, ListAbandonedPathTool.NAME,
+            QueryOrderTool.NAME, QueryTrajectoryTool.NAME, GenerateCustomsInfoTool.NAME);
 
     private final SearchKnowledgeBaseTool searchKb;
     private final SearchHistoryTool searchHistory;
     private final UpdateUserProfileTool updateProfile;
     private final ReadHandoverTool readHandover;
     private final ListAbandonedPathTool listAbandoned;
+    private final QueryOrderTool queryOrder;
+    private final QueryTrajectoryTool queryTrajectory;
+    private final GenerateCustomsInfoTool generateCustoms;
+    /** 业务槽位硬闸（可选：缺省时业务工具按 args 直取，不做证据裁决）。 */
+    private final BusinessSlotGate slotGate;
 
     public PeroToolExecutor(SearchKnowledgeBaseTool searchKb,
                             SearchHistoryTool searchHistory,
                             UpdateUserProfileTool updateProfile,
                             ReadHandoverTool readHandover,
-                            ListAbandonedPathTool listAbandoned) {
+                            ListAbandonedPathTool listAbandoned,
+                            QueryOrderTool queryOrder,
+                            QueryTrajectoryTool queryTrajectory,
+                            GenerateCustomsInfoTool generateCustoms,
+                            ObjectProvider<BusinessSlotGate> slotGateProvider) {
         this.searchKb = searchKb;
         this.searchHistory = searchHistory;
         this.updateProfile = updateProfile;
         this.readHandover = readHandover;
         this.listAbandoned = listAbandoned;
+        this.queryOrder = queryOrder;
+        this.queryTrajectory = queryTrajectory;
+        this.generateCustoms = generateCustoms;
+        this.slotGate = slotGateProvider == null ? null : slotGateProvider.getIfAvailable();
     }
 
     @Override
@@ -83,6 +99,19 @@ public class PeroToolExecutor implements ToolExecutor {
                         readHandover.execute(ctx.userId(), ctx.sessionId());
                 case ListAbandonedPathTool.NAME ->
                         listAbandoned.execute(ctx.userId(), ctx.sessionId());
+                case QueryOrderTool.NAME -> {
+                    String orderNo = resolveSlotValue(QueryOrderTool.NAME, args, ctx, "orderNo");
+                    yield renderOrder(queryOrder.execute(orderNo));
+                }
+                case QueryTrajectoryTool.NAME -> {
+                    String orderNo = resolveSlotValue(QueryTrajectoryTool.NAME, args, ctx, "orderNo");
+                    yield renderTrajectory(queryTrajectory.execute(orderNo));
+                }
+                case GenerateCustomsInfoTool.NAME -> {
+                    String mappingFileId = resolveSlotValue(GenerateCustomsInfoTool.NAME, args, ctx, "mappingFileId");
+                    String taskId = slotGate == null ? null : slotGate.currentTaskId(ctx);
+                    yield generateCustoms.execute(mappingFileId, taskId);
+                }
                 default -> "[tool_executor] 未知工具: " + name + "（已注册: " + KNOWN + "）";
             };
             log.debug("PERO 工具调用 action={} userId={} 结果长度={}",
@@ -92,6 +121,40 @@ public class PeroToolExecutor implements ToolExecutor {
             log.info("PERO 工具参数校验失败 action={} userId={} err={}", name, ctx.userId(), e.getMessage());
             return "[tool_executor] 参数错误: " + e.getMessage();
         }
+    }
+
+    /** 业务工具：经槽位硬闸裁决必填槽值；硬闸缺失时按 args 直取。 */
+    private String resolveSlotValue(String toolName, Map<String, Object> args, Perception ctx, String argKey) {
+        if (slotGate != null) {
+            return slotGate.resolveSlotValue(toolName, args, ctx);
+        }
+        String v = textArg(args, argKey);
+        if (v == null) {
+            throw new IllegalArgumentException(argKey + " 缺失");
+        }
+        return v;
+    }
+
+    private static String renderOrder(OrderInfo o) {
+        if (!o.found()) {
+            return "[query_order] 未查询到订单 " + o.orderNo() + "，请核对单号";
+        }
+        return "[query_order] 订单 " + o.orderNo() + "：状态=" + o.status()
+                + "，寄件=" + o.sender() + "，收件=" + o.receiver()
+                + "，路线=" + o.originCity() + "→" + o.destCity()
+                + "，重量=" + o.weightKg() + "kg，创建时间=" + o.createdTime();
+    }
+
+    private static String renderTrajectory(List<TrajectoryNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return "[query_trajectory] 未查询到订单轨迹，请核对单号";
+        }
+        StringBuilder sb = new StringBuilder("[query_trajectory] 轨迹列表：\n");
+        for (TrajectoryNode n : nodes) {
+            sb.append("- ").append(n.time()).append(" ").append(n.node())
+                    .append(" ").append(n.action()).append("（").append(n.description()).append("）\n");
+        }
+        return sb.toString();
     }
 
     /**
@@ -159,5 +222,18 @@ public class PeroToolExecutor implements ToolExecutor {
             }
         }
         return 0;
+    }
+
+    /** 取可选文本参数（业务工具直取回退用）。 */
+    private static String textArg(Map<String, Object> args, String key) {
+        if (args == null) {
+            return null;
+        }
+        Object v = args.get(key);
+        if (v == null) {
+            return null;
+        }
+        String s = String.valueOf(v).trim();
+        return s.isBlank() ? null : s;
     }
 }

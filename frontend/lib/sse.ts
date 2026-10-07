@@ -8,6 +8,8 @@ export interface ChatRequestBody {
   subDomain?: string;
   identity?: string;
   sessionId?: string;
+  /** 本轮上传附件 fileId（清关意图：先上传映射表拿到 fileId 再随对话轮带上，作为 USER_UPLOAD 证据）。 */
+  attachmentFileId?: string;
 }
 
 export type ChatEventHandler = (eventName: string, data: unknown) => void;

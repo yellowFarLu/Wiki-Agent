@@ -108,8 +108,12 @@ class ChatServiceRagEvalCaptureTest {
         when(v1v2.getIfAvailable()).thenReturn(null);
         ObjectProvider<RagEvalSampleRecorder> recorderProvider = mock(ObjectProvider.class);
         when(recorderProvider.getIfAvailable()).thenReturn(sampleRecorder);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<com.wikiagent.application.business.BusinessIntentGateway> businessGateway =
+                mock(ObjectProvider.class);
+        when(businessGateway.getIfAvailable()).thenReturn(null);
         return new ChatService(props, mock(AgentRagService.class), rewriter, retrieval, streamer,
-                multiAgent, v1v2, chain, fallback, history, recorderProvider, false, false);
+                multiAgent, v1v2, chain, fallback, history, recorderProvider, businessGateway, false, false);
     }
 
     private void stubStream(String answer) {

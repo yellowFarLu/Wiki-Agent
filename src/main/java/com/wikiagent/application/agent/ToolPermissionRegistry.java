@@ -35,15 +35,18 @@ public class ToolPermissionRegistry {
     /** 全部已知工具名（与 ToolRegistryImpl/DefaultToolRegistry 保持一致）。 */
     public static final List<String> ALL_TOOLS = List.of(
             "search_knowledge_base", "search_history", "update_user_profile",
-            "read_handover", "list_abandoned_paths");
+            "read_handover", "list_abandoned_paths",
+            "query_order", "query_trajectory", "generate_customs_info");
 
     /** 未配置 Agent 时的默认白名单：全部已知工具。 */
     public static final List<String> DEFAULT_ALLOWLIST = ALL_TOOLS;
 
-    /** 内置默认权限：写工具 update_user_profile 需人工批准（高危）。 */
+    /** 内置默认权限：写工具 update_user_profile 需人工批准；业务查询需对应 scope（免批准）。 */
     private static final Map<String, ToolPermission> BUILTIN = Map.of(
-            "update_user_profile",
-            new ToolPermission("update_user_profile", null, null, true));
+            "update_user_profile", new ToolPermission("update_user_profile", null, null, true),
+            "query_order", new ToolPermission("query_order", null, "order:read", false),
+            "query_trajectory", new ToolPermission("query_trajectory", null, "order:read", false),
+            "generate_customs_info", new ToolPermission("generate_customs_info", null, "customs:write", false));
 
     private final ToolPermissionProperties props;
     private final ToolPermissionJpaDao dao;

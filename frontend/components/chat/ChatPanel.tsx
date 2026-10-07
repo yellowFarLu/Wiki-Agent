@@ -14,9 +14,14 @@ import {
   Space,
   Tag,
   Typography,
+  Upload,
 } from 'antd';
+import type { UploadProps } from 'antd';
 import {
   DislikeOutlined,
+  DownloadOutlined,
+  FileExcelOutlined,
+  InboxOutlined,
   LikeOutlined,
   LoadingOutlined,
   PlusOutlined,
@@ -26,10 +31,10 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { useRouter } from 'next/navigation';
-import { getChatMessages, listChatSessions, submitFeedback } from '@/lib/api';
+import { getChatMessages, listChatSessions, submitFeedback, uploadBusinessMapping } from '@/lib/api';
 import { chatStream } from '@/lib/sse';
 import { getSettings } from '@/lib/settings';
-import type { ChatStage, Source } from '@/lib/types';
+import type { ChatStage, FileReadyPayload, SlotRequestPayload, Source } from '@/lib/types';
 import AnswerText from '@/components/chat/AnswerText';
 
 interface ChatMsg {
@@ -49,6 +54,10 @@ interface ChatMsg {
   fallbackMode?: string;
   feedback?: 'USEFUL' | 'USELESS';
   feedbackFailed?: boolean;
+  /** 业务意图缺槽追问（订单号输入框 / 映射表上传区）；存在时该气泡挂起等待用户补槽。 */
+  slotRequest?: SlotRequestPayload;
+  /** 清关 Excel 已生成（下载卡片）。 */
+  fileReady?: FileReadyPayload;
 }
 
 let uidSeq = 0;
@@ -137,16 +146,143 @@ const ChatComposer = memo(function ChatComposer({
 });
 
 /**
+ * 缺槽追问操作区（业务意图挂起点）：
+ * <ul>
+ *   <li>orderNo → 内联输入框，提交的原文由后端 ActGate 正则解析</li>
+ *   <li>mappingExcel → 上传区，先调映射表上传接口拿 fileId，再带 fileId 发起对话轮</li>
+ * </ul>
+ * 交互期间禁用，防止重复提交。
+ */
+const SlotRequestArea = memo(function SlotRequestArea({
+  slotRequest,
+  busy,
+  onOrderNo,
+  onMappingFile,
+}: {
+  slotRequest: SlotRequestPayload;
+  busy: boolean;
+  onOrderNo: (orderNo: string) => void;
+  onMappingFile: (file: File) => Promise<void>;
+}) {
+  const [orderNo, setOrderNo] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const { message } = App.useApp();
+
+  if (slotRequest.slot === 'orderNo') {
+    const submit = () => {
+      const v = orderNo.trim();
+      if (!v || busy) return;
+      setOrderNo('');
+      onOrderNo(v);
+    };
+    return (
+      <div style={{ marginTop: 10 }}>
+        <Space.Compact style={{ width: '100%' }}>
+          <Input
+            value={orderNo}
+            onChange={(e) => setOrderNo(e.target.value)}
+            placeholder="请输入订单号（8–20 位字母或数字）"
+            onPressEnter={submit}
+            disabled={busy}
+          />
+          <Button type="primary" icon={<SendOutlined />} onClick={submit} disabled={busy}>
+            提交
+          </Button>
+        </Space.Compact>
+        {slotRequest.retry > 0 && (
+          <div>
+            <Typography.Text type="warning" style={{ fontSize: 12 }}>
+              未能识别上次提供的信息，请核对后重新输入（第 {slotRequest.retry + 1} 次）
+            </Typography.Text>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (slotRequest.slot === 'mappingExcel') {
+    const uploadProps: UploadProps = {
+      accept: '.xlsx',
+      multiple: false,
+      showUploadList: false,
+      disabled: busy || uploading,
+      customRequest: async (options) => {
+        setUploading(true);
+        try {
+          await onMappingFile(options.file as File);
+          options.onSuccess?.({}, new XMLHttpRequest());
+        } catch (e) {
+          options.onError?.(e as Error);
+          message.error(e instanceof Error ? `上传失败：${e.message}` : '上传失败');
+        } finally {
+          setUploading(false);
+        }
+      },
+    };
+    return (
+      <div style={{ marginTop: 10 }}>
+        <Upload.Dragger {...uploadProps}>
+          <p className="ant-upload-drag-icon">
+            {uploading ? <LoadingOutlined spin /> : <InboxOutlined />}
+          </p>
+          <p className="ant-upload-text">
+            {uploading ? '映射表上传校验中…' : '点击或拖拽上传小包号 / 大包号映射 Excel'}
+          </p>
+          <p className="ant-upload-hint">
+            仅支持 .xlsx；首行须含「小包号」「大包号」两列，且至少一行数据
+          </p>
+        </Upload.Dragger>
+      </div>
+    );
+  }
+
+  return null;
+});
+
+/** 清关 Excel 产物下载卡片：文件名 / 行数 / 下载（同域附件响应，历史会话仍可重复下载）。 */
+const FileReadyCard = memo(function FileReadyCard({ file }: { file: FileReadyPayload }) {
+  return (
+    <Card
+      size="small"
+      style={{ marginTop: 10, background: '#f6ffed', borderColor: '#b7eb8f' }}
+      title={
+        <Space>
+          <FileExcelOutlined style={{ color: '#52c41a' }} />
+          <span>清关信息已生成</span>
+        </Space>
+      }
+      extra={
+        <Button type="primary" size="small" icon={<DownloadOutlined />} href={file.downloadUrl}>
+          下载 Excel
+        </Button>
+      }
+    >
+      <Typography.Text style={{ fontSize: 13 }}>{file.fileName}</Typography.Text>
+      <br />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        共 {file.rowCount} 行；历史会话中仍可通过此卡片重新下载
+      </Typography.Text>
+    </Card>
+  );
+});
+
+/**
  * 单条消息气泡。React.memo 浅比较 props：
  * 流式输出时只有最后一条 assistant 消息对象被替换，历史消息引用不变、直接跳过渲染；
  * 打字时输入区状态已下沉，本组件完全不重渲染。
  */
 const ChatMessageItem = memo(function ChatMessageItem({
   m,
+  busy,
   onFeedback,
+  onSlotOrderNo,
+  onSlotMapping,
 }: {
   m: ChatMsg;
+  busy: boolean;
   onFeedback: (target: ChatMsg, type: 'USEFUL' | 'USELESS') => void;
+  onSlotOrderNo: (from: ChatMsg, orderNo: string) => void;
+  onSlotMapping: (from: ChatMsg, file: File) => Promise<void>;
 }) {
   return (
     <div
@@ -213,6 +349,22 @@ const ChatMessageItem = memo(function ChatMessageItem({
               </div>
             )}
             <AnswerText text={m.content} sources={m.sources} />
+            {m.slotRequest && (
+              <>
+                {!m.content && (
+                  <Typography.Text style={{ display: 'block', marginBottom: 2 }}>
+                    {m.slotRequest.prompt}
+                  </Typography.Text>
+                )}
+                <SlotRequestArea
+                  slotRequest={m.slotRequest}
+                  busy={busy}
+                  onOrderNo={(v) => onSlotOrderNo(m, v)}
+                  onMappingFile={(f) => onSlotMapping(m, f)}
+                />
+              </>
+            )}
+            {m.fileReady && <FileReadyCard file={m.fileReady} />}
             {m.streaming && m.content && <LoadingOutlined spin style={{ marginLeft: 6 }} />}
             {m.sources.length > 0 && !m.streaming && (
               <div style={{ marginTop: 8, borderTop: '1px dashed #eee', paddingTop: 6 }}>
@@ -403,15 +555,105 @@ export default function ChatPanel() {
     });
   }, []);
 
-  const send = useCallback(
-    (question: string) => {
+  /**
+   * SSE 事件统一处理：知识问答与业务意图共用同一套事件。
+   * slot_request → 气泡挂起进入补槽态（结束 sending，输入在气泡内完成）；
+   * file_ready → 挂下载卡片。注意 slot_request 后不会再收到 done。
+   */
+  const handleStreamEvent = useCallback(
+    (name: string, data: unknown) => {
+      switch (name) {
+        case 'session': {
+          const sid = (data as { sessionId?: string }).sessionId;
+          if (sid) {
+            sessionIdRef.current = sid;
+            setSessionId(sid);
+            updateLastAssistant((m) => ({ ...m, sid }));
+          }
+          break;
+        }
+        case 'stage': {
+          const d = data as { stage?: ChatStage; rewrittenQuery?: string; mode?: string };
+          updateLastAssistant((m) => ({
+            ...m,
+            stage: d.stage ?? null,
+            rewrittenQuery: d.rewrittenQuery ?? m.rewrittenQuery,
+            fallbackMode: d.stage === 'fallback' ? d.mode ?? m.fallbackMode : m.fallbackMode,
+          }));
+          break;
+        }
+        case 'sources': {
+          if (Array.isArray(data)) {
+            updateLastAssistant((m) => ({ ...m, sources: data as Source[] }));
+          }
+          break;
+        }
+        case 'delta': {
+          const text = (data as { text?: string }).text ?? '';
+          updateLastAssistant((m) => ({ ...m, content: m.content + text }));
+          break;
+        }
+        case 'slot_request': {
+          const payload = data as SlotRequestPayload;
+          updateLastAssistant((m) => ({ ...m, slotRequest: payload, streaming: false, stage: null }));
+          setSending(false);
+          break;
+        }
+        case 'file_ready': {
+          const payload = data as FileReadyPayload;
+          updateLastAssistant((m) => ({ ...m, fileReady: payload }));
+          break;
+        }
+        case 'blocked': {
+          const msg = (data as { message?: string }).message ?? '请求被拦截';
+          updateLastAssistant((m) => ({ ...m, blocked: msg, streaming: false, stage: null }));
+          setSending(false);
+          break;
+        }
+        case 'error': {
+          const msg = (data as { message?: string }).message ?? '对话出错';
+          updateLastAssistant((m) => ({ ...m, error: msg, streaming: false, stage: null }));
+          setSending(false);
+          break;
+        }
+        case 'done': {
+          updateLastAssistant((m) => ({ ...m, streaming: false, stage: null }));
+          setSending(false);
+          void loadSessions();
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [loadSessions, updateLastAssistant],
+  );
+
+  /**
+   * 发起一轮对话并打开 SSE 流。clearUid 非空（缺槽追问续跑）时，
+   * 先抹掉原追问气泡上的 slotRequest，再追加 user/assistant 两条气泡；
+   * attachmentFileId 用于映射表上传后的续跑轮。
+   */
+  const startTurn = useCallback(
+    (question: string, attachmentFileId?: string, clearUid?: string) => {
       setSending(true);
       stickToBottomRef.current = true;
-      setMessages((prev) => [
-        ...prev,
-        { _uid: genUid(), role: 'user', content: question, sources: [], stage: null },
-        emptyAssistant(),
-      ]);
+      setMessages((prev) => {
+        const base = clearUid
+          ? prev.map((m) => (m._uid === clearUid ? { ...m, slotRequest: undefined } : m))
+          : prev;
+        return [
+          ...base,
+          {
+            _uid: genUid(),
+            role: 'user' as const,
+            content: question,
+            sources: [] as Source[],
+            stage: null,
+          },
+          emptyAssistant(),
+        ];
+      });
 
       const settings = getSettings();
       abortRef.current = chatStream(
@@ -421,64 +663,30 @@ export default function ChatPanel() {
           subDomain: settings.subDomain || undefined,
           identity: settings.identity || undefined,
           sessionId: sessionIdRef.current ?? undefined,
+          attachmentFileId,
         },
-        (name, data) => {
-          switch (name) {
-            case 'session': {
-              const sid = (data as { sessionId?: string }).sessionId;
-              if (sid) {
-                sessionIdRef.current = sid;
-                setSessionId(sid);
-                updateLastAssistant((m) => ({ ...m, sid }));
-              }
-              break;
-            }
-            case 'stage': {
-              const d = data as { stage?: ChatStage; rewrittenQuery?: string; mode?: string };
-              updateLastAssistant((m) => ({
-                ...m,
-                stage: d.stage ?? null,
-                rewrittenQuery: d.rewrittenQuery ?? m.rewrittenQuery,
-                fallbackMode: d.stage === 'fallback' ? d.mode ?? m.fallbackMode : m.fallbackMode,
-              }));
-              break;
-            }
-            case 'sources': {
-              if (Array.isArray(data)) {
-                updateLastAssistant((m) => ({ ...m, sources: data as Source[] }));
-              }
-              break;
-            }
-            case 'delta': {
-              const text = (data as { text?: string }).text ?? '';
-              updateLastAssistant((m) => ({ ...m, content: m.content + text }));
-              break;
-            }
-            case 'blocked': {
-              const msg = (data as { message?: string }).message ?? '请求被拦截';
-              updateLastAssistant((m) => ({ ...m, blocked: msg, streaming: false, stage: null }));
-              setSending(false);
-              break;
-            }
-            case 'error': {
-              const msg = (data as { message?: string }).message ?? '对话出错';
-              updateLastAssistant((m) => ({ ...m, error: msg, streaming: false, stage: null }));
-              setSending(false);
-              break;
-            }
-            case 'done': {
-              updateLastAssistant((m) => ({ ...m, streaming: false, stage: null }));
-              setSending(false);
-              void loadSessions();
-              break;
-            }
-            default:
-              break;
-          }
-        },
+        handleStreamEvent,
       );
     },
-    [loadSessions, updateLastAssistant],
+    [handleStreamEvent],
+  );
+
+  /** 普通发送（知识问答或被路由回知识链路的输入）。 */
+  const send = useCallback((question: string) => startTurn(question), [startTurn]);
+
+  /** 缺槽-订单号：追问气泡内提交的文本即新一轮 question，由后端 ActGate 正则解析。 */
+  const submitSlotOrderNo = useCallback(
+    (from: ChatMsg, orderNo: string) => startTurn(orderNo, undefined, from._uid),
+    [startTurn],
+  );
+
+  /** 缺槽-映射表：先上传（后端同步校验列头/行数，422 会抛错），拿 fileId 后续跑对话轮。 */
+  const submitSlotMapping = useCallback(
+    async (from: ChatMsg, file: File) => {
+      const uploaded = await uploadBusinessMapping(file);
+      startTurn('映射表已上传，请生成清关信息', uploaded.fileId, from._uid);
+    },
+    [startTurn],
   );
 
   useEffect(() => {
@@ -627,7 +835,16 @@ export default function ChatPanel() {
               }
             />
           ) : (
-            messages.map((m) => <ChatMessageItem key={m._uid} m={m} onFeedback={sendFeedback} />)
+            messages.map((m) => (
+              <ChatMessageItem
+                key={m._uid}
+                m={m}
+                busy={sending}
+                onFeedback={sendFeedback}
+                onSlotOrderNo={submitSlotOrderNo}
+                onSlotMapping={submitSlotMapping}
+              />
+            ))
           )}
         </div>
 

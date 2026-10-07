@@ -23,7 +23,8 @@ public class DefaultToolRegistry implements ToolRegistry {
 
     private static final List<String> ALL_TOOLS = List.of(
             "search_knowledge_base", "search_history", "update_user_profile",
-            "read_handover", "list_abandoned_paths");
+            "read_handover", "list_abandoned_paths",
+            "query_order", "query_trajectory", "generate_customs_info");
 
     @Override
     public List<String> allowedTools(PlanStep step) {
@@ -34,6 +35,8 @@ public class DefaultToolRegistry implements ToolRegistry {
             case "search_kb" -> List.of("search_knowledge_base");
             case "search_history" -> List.of("search_history");
             case "update_profile" -> List.of("update_user_profile");
+            case "business_query" -> List.of("query_order", "query_trajectory");
+            case "customs_generate" -> List.of("generate_customs_info");
             case "generate" -> List.of();
             default -> ALL_TOOLS;
         };

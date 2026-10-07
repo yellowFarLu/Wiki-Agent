@@ -6,6 +6,7 @@ import com.wikiagent.domain.agent.PlanStep;
 import com.wikiagent.domain.agent.ReActResult;
 import com.wikiagent.domain.agent.ReActStep;
 import com.wikiagent.domain.agent.ThoughtActionObservation;
+import com.wikiagent.domain.business.SlotClarificationSignal;
 import com.wikiagent.domain.task.ErrorCode;
 import com.wikiagent.domain.task.FatalTaskException;
 import com.wikiagent.domain.task.HumanRequiredException;
@@ -56,13 +57,37 @@ public class ReActExecutor {
     private static final Logger log = LoggerFactory.getLogger(ReActExecutor.class);
 
     static final String REACT_SYSTEM = """
-            你是企业知识库 Agent 的 ReAct 执行器。基于当前节点目标与历史轨迹，输出下一步：
+            你是企业知识库 Agent 的 ReAct 执行器。基于用户原始诉求、当前节点目标与历史轨迹，输出下一步：
             只输出一个 JSON，不要输出任何其他文字：
             {"thought":"...","action":{"name":"...","args":"..."},"finalAnswer":null}
             或（节点结束）：
             {"thought":"...","action":null,"finalAnswer":"...最终答案..."}
-            action.name 必须在工具白名单中；完成节点目标时 action=null 且 finalAnswer 非空。
+
+            规则：
+            1. action.name 必须在工具白名单中；args 必须是白名单描述的 JSON 字符串。
+            2. 需要订单号、上传文件等前置信息时，必须先发起对应工具调用——缺信息时系统会以明确
+               Observation 提示，由系统向用户追问；严禁在 finalAnswer 中自行向用户追问，也严禁
+               编造或猜测订单号、文件 ID 等参数。
+            3. 仅当节点目标已由工具返回结果完成时，才输出 action=null 且 finalAnswer 非空；
+               finalAnswer 必须严格基于工具返回的事实，不得添加工具结果之外的信息。
             """;
+
+    /**
+     * 工具描述/参数说明（让模型首轮即可正确选工具、构造 args）。
+     * 白名单只给名字时模型常跳过工具直接 FINAL，描述与必填槽说明是 ReAct 提示词的必要部分。
+     */
+    static final Map<String, String> TOOL_DESCRIPTIONS = Map.of(
+            "search_knowledge_base", "检索企业知识库。args JSON: {\"query\":\"检索词\"}",
+            "search_history", "检索当前用户的历史对话。args JSON: {\"query\":\"检索词\",\"topK\":3}",
+            "update_user_profile", "更新当前用户档案。args JSON: {\"key\":\"字段名\",\"value\":\"字段值\"}",
+            "read_handover", "读取本会话的交接档案。args JSON: {}",
+            "list_abandoned_paths", "列出当前用户未完成的历史路径。args JSON: {}",
+            "query_order", "按订单号查询订单详情。args JSON: {\"orderNo\":\"8-20位字母或数字的单号\"}；"
+                    + "若缺少订单号，照常调用，系统会返回追问提示",
+            "query_trajectory", "按订单号查询物流轨迹列表。args JSON: {\"orderNo\":\"8-20位字母或数字的单号\"}；"
+                    + "若缺少订单号，照常调用，系统会返回追问提示",
+            "generate_customs_info", "基于用户上传的映射 Excel 生成清关 Excel。"
+                    + "args JSON: {\"mappingFileId\":\"上传文件的ID\"}；若文件尚未上传，照常调用，系统会返回上传提示");
 
     private final ChatModel model;
     private final ToolRegistry toolRegistry;
@@ -194,6 +219,10 @@ public class ReActExecutor {
                 } else {
                     try {
                         observation = toolExecutor.invoke(action, ctx);
+                    } catch (SlotClarificationSignal e) {
+                        // 神经符号硬闸：缺槽信号必须原样穿出，由业务网关捕获置 WAITING_SLOT，
+                        // 不得吞成 Observation 文本（对齐 LangGraph "do not wrap interrupt in try/except"）
+                        throw e;
                     } catch (Exception e) {
                         observation = "ERROR: " + e.getMessage();
                         log.warn("ReAct step {} iter {} 工具 {} 调用失败: {}",
@@ -223,10 +252,20 @@ public class ReActExecutor {
         sb.append("当前节点目标：").append(step.goal()).append("\n");
         sb.append("节点类型：").append(step.stepType()).append("\n");
         sb.append("用户意图：").append(ctx.intent()).append("\n");
+        sb.append("用户原始诉求：").append(ctx.userInput() == null ? "" : ctx.userInput()).append("\n");
         if (step.hint() != null) {
             sb.append("历史反思 hint：").append(step.hint()).append("\n");
         }
-        sb.append("允许调用的工具：").append(allowedTools).append("\n\n");
+        sb.append("允许调用的工具：\n");
+        for (String t : allowedTools) {
+            String d = TOOL_DESCRIPTIONS.get(t);
+            sb.append("  - ").append(t);
+            if (d != null && !d.isBlank()) {
+                sb.append("：").append(d);
+            }
+            sb.append("\n");
+        }
+        sb.append("\n");
         if (history.isEmpty()) {
             sb.append("历史轨迹：无（首轮）\n");
         } else {

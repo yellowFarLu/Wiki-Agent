@@ -129,6 +129,29 @@ export interface Source {
 
 export type ChatStage = 'routing' | 'rewriting' | 'retrieving' | 'grading' | 'generating' | 'fallback';
 
+// ============ 业务意图（订单 / 轨迹 / 清关） ============
+
+/** slot_request 事件载荷：缺必填槽时后端追问，前端按 slot 渲染输入框 / 上传区。 */
+export interface SlotRequestPayload {
+  intent: string;
+  /** 等待的槽名：orderNo（订单号）/ mappingExcel（映射表）。 */
+  slot: string;
+  /** 追问文案。 */
+  prompt: string;
+  /** 已重问次数。 */
+  retry: number;
+}
+
+/** file_ready 事件载荷：清关 Excel 已生成，前端渲染下载卡片。 */
+export interface FileReadyPayload {
+  fileId: string;
+  fileName: string;
+  rowCount: number;
+  downloadUrl: string;
+  /** 预览前 N 行（清关派生字段）。 */
+  preview?: Array<Record<string, unknown>>;
+}
+
 export interface ChatSessionItem extends Record<string, unknown> {
   sessionId?: string;
 }

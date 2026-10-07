@@ -1,6 +1,7 @@
 package com.wikiagent.service.chat;
 
 import com.wikiagent.application.agent.AgentOrchestrator;
+import com.wikiagent.application.business.BusinessIntentGateway;
 import com.wikiagent.application.knowledge.RagEvalSampleRecorder;
 import com.wikiagent.application.multiagent.MultiAgentOrchestrator;
 import com.wikiagent.application.multiagent.TenantKey;
@@ -64,6 +65,8 @@ public class ChatService {
     private final ChatHistoryService historyService;
     /** RAG 回答质量评测样本采集器（wikiagent.answer-eval.enabled=false 时不装配，为 null 零影响）。 */
     private final RagEvalSampleRecorder ragEvalRecorder;
+    /** 业务意图网关（订单/轨迹/清关），在四层链路之前拦截；关闭时为 null。 */
+    private final ObjectProvider<BusinessIntentGateway> businessGatewayProvider;
     private final boolean multiAgentEnabled;
     private final boolean peroEnabled;
 
@@ -82,6 +85,7 @@ public class ChatService {
                        FallbackAnswerService fallback,
                        ChatHistoryService historyService,
                        ObjectProvider<RagEvalSampleRecorder> ragEvalRecorderProvider,
+                       ObjectProvider<BusinessIntentGateway> businessGatewayProvider,
                        @Value("${wikiagent.multi-agent.enabled:true}") boolean multiAgentEnabled,
                        @Value("${wikiagent.pero.enabled:true}") boolean peroEnabled) {
         this.props = props;
@@ -95,6 +99,7 @@ public class ChatService {
         this.fallback = fallback;
         this.historyService = historyService;
         this.ragEvalRecorder = ragEvalRecorderProvider == null ? null : ragEvalRecorderProvider.getIfAvailable();
+        this.businessGatewayProvider = businessGatewayProvider;
         this.multiAgentEnabled = multiAgentEnabled;
         this.peroEnabled = peroEnabled;
     }
@@ -206,6 +211,17 @@ public class ChatService {
             }
             String question = inputResult.content() == null ? rawQuestion : inputResult.content().strip();
             evalQuestion.set(question);
+
+            // === 优先级 0：业务意图网关（订单查询/轨迹查询/清关信息生成），输入安全网关之后、
+            // 四层链路之前拦截。HANDLED 表示业务流已闭环；ROUTE_KNOWLEDGE 则回落到下面链路。===
+            BusinessIntentGateway businessGateway = businessGatewayProvider.getIfAvailable();
+            if (businessGateway != null && businessGateway.enabled()) {
+                BusinessIntentGateway.Outcome outcome =
+                        businessGateway.handle(userId, sessionId, question, request.attachmentFileId(), sse);
+                if (outcome == BusinessIntentGateway.Outcome.HANDLED) {
+                    return;
+                }
+            }
 
             // === 优先级 1：v6 Multi-Agent（PERO 开启 + 9×6 路由字段齐全）===
             if (peroEnabled && multiAgentEnabled && multiAgent.enabled()

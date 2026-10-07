@@ -42,7 +42,8 @@ public class ToolRegistryImpl implements ToolRegistry {
     /** 全部已知工具名（与 DefaultToolRegistry 一致）。 */
     private static final List<String> ALL_TOOLS = List.of(
             SearchKnowledgeBaseTool.NAME, SearchHistoryTool.NAME, UpdateUserProfileTool.NAME,
-            ReadHandoverTool.NAME, ListAbandonedPathTool.NAME);
+            ReadHandoverTool.NAME, ListAbandonedPathTool.NAME,
+            QueryOrderTool.NAME, QueryTrajectoryTool.NAME, GenerateCustomsInfoTool.NAME);
 
     private final Map<String, Object> tools = new LinkedHashMap<>();
 
@@ -50,7 +51,10 @@ public class ToolRegistryImpl implements ToolRegistry {
                             ObjectProvider<SearchHistoryTool> searchHistoryProvider,
                             ObjectProvider<UpdateUserProfileTool> updateProfileProvider,
                             ObjectProvider<ReadHandoverTool> readHandoverProvider,
-                            ObjectProvider<ListAbandonedPathTool> listAbandonedProvider) {
+                            ObjectProvider<ListAbandonedPathTool> listAbandonedProvider,
+                            ObjectProvider<QueryOrderTool> queryOrderProvider,
+                            ObjectProvider<QueryTrajectoryTool> queryTrajectoryProvider,
+                            ObjectProvider<GenerateCustomsInfoTool> generateCustomsProvider) {
         // 工具 #1：v1-v2 路径必然存在
         register(SearchKnowledgeBaseTool.NAME, searchKb);
         // 工具 #2-#5：端口实现缺失时不创建，容错注入
@@ -58,6 +62,10 @@ public class ToolRegistryImpl implements ToolRegistry {
         registerIfPresent(UpdateUserProfileTool.NAME, updateProfileProvider);
         registerIfPresent(ReadHandoverTool.NAME, readHandoverProvider);
         registerIfPresent(ListAbandonedPathTool.NAME, listAbandonedProvider);
+        // 业务工具（订单/轨迹/清关）
+        registerIfPresent(QueryOrderTool.NAME, queryOrderProvider);
+        registerIfPresent(QueryTrajectoryTool.NAME, queryTrajectoryProvider);
+        registerIfPresent(GenerateCustomsInfoTool.NAME, generateCustomsProvider);
         log.info("v1-v2 工具注册表初始化完成，已注册 {} 个工具: {}",
                 tools.size(), tools.keySet());
     }
@@ -105,6 +113,8 @@ public class ToolRegistryImpl implements ToolRegistry {
             case "search_kb" -> List.of(SearchKnowledgeBaseTool.NAME);
             case "search_history" -> List.of(SearchHistoryTool.NAME);
             case "update_profile" -> List.of(UpdateUserProfileTool.NAME);
+            case "business_query" -> List.of(QueryOrderTool.NAME, QueryTrajectoryTool.NAME);
+            case "customs_generate" -> List.of(GenerateCustomsInfoTool.NAME);
             case "generate" -> List.of();
             default -> ALL_TOOLS;
         };
